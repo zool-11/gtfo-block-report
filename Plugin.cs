@@ -4,7 +4,6 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
-using HarmonyLib;
 
 namespace BlockPlayerStatusReport
 {
@@ -27,52 +26,54 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                // 根据程序集名称找ModList，ModList.dll的AssemblyName就是ModList
-                Assembly modListAssembly = AppDomain.CurrentDomain.GetAssemblies()
-                    .FirstOrDefault(asm => asm.GetName().Name == "ModList");
+                // 按程序集名称定位 GTFO-API
+                Assembly gtfoApiAsm = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "GTFO-API");
 
-                if (modListAssembly == null)
+                if (gtfoApiAsm == null)
                 {
-                    Log.LogError($"[{PluginInfo.Name}] ModList assembly not found, mod disabled");
+                    Log.LogError($"[{PluginInfo.Name}] GTFO-API assembly not found");
                     return;
                 }
-                Log.LogInfo($"[{PluginInfo.Name}] Found ModList assembly");
+                Log.LogInfo($"[{PluginInfo.Name}] Found GTFO-API assembly");
 
-                Type modListManagerType = modListAssembly.GetType("ModList.ModListManager");
-                if (modListManagerType == null)
+                Type networkApiType;
+                try
                 {
-                    Log.LogError($"[{PluginInfo.Name}] ModListManager type not found");
+                    networkApiType = gtfoApiAsm.GetType("GTFO.API.NetworkAPI");
+                }
+                catch (Exception ex)
+                {
+                    Log.LogError($"[{PluginInfo.Name}] GetType NetworkAPI failed: {ex.Message}");
                     return;
                 }
-                Log.LogInfo($"[{PluginInfo.Name}] Found ModListManager");
 
-                MethodInfo broadcastMethod = modListManagerType.GetMethod("BroadcastMods",
-                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
-
-                if (broadcastMethod == null)
+                if (networkApiType == null)
                 {
-                    Log.LogError($"[{PluginInfo.Name}] BroadcastMods method not found");
+                    Log.LogError($"[{PluginInfo.Name}] NetworkAPI type not found");
                     return;
                 }
-                Log.LogInfo($"[{PluginInfo.Name}] Found BroadcastMods");
 
-                Harmony harmony = new Harmony(PluginInfo.GUID);
-                MethodInfo prefixHook = typeof(Plugin).GetMethod(nameof(BroadcastModsPrefix),
-                    BindingFlags.Public | BindingFlags.Static);
-                harmony.Patch(broadcastMethod, prefix: new HarmonyMethod(prefixHook));
+                Log.LogInfo($"[{PluginInfo.Name}] === NetworkAPI ALL Static Methods ===");
 
-                Log.LogInfo($"[{PluginInfo.Name}] Patch applied success");
+                // 枚举所有静态方法：公开+非公开
+                MethodInfo[] methods = networkApiType.GetMethods(
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+
+                foreach (var mi in methods)
+                {
+                    string isGeneric = mi.IsGenericMethod ? " [GENERIC]" : "";
+                    var paramList = string.Join(", ", mi.GetParameters()
+                        .Select(p => $"{p.ParameterType.Name} {p.Name}"));
+                    Log.LogInfo($"[{PluginInfo.Name}] {mi.Name}{isGeneric} | ({paramList})");
+                }
+
+                Log.LogInfo($"[{PluginInfo.Name}] === End of List ===");
             }
             catch (Exception ex)
             {
-                Log.LogError($"[{PluginInfo.Name}] Load exception: {ex}");
+                Log.LogError($"[{PluginInfo.Name}] Top-level exception: {ex}");
             }
-        }
-
-        public static bool BroadcastModsPrefix()
-        {
-            Plugin.LogInstance?.LogInfo("[BlockReport] Blocked ModList BroadcastMods, skip sending mod list to others");
-            return false;
         }
     }
 }
