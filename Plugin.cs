@@ -27,9 +27,24 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                // 在已加载程序集查找ModList，不硬编码程序集名称
-                Assembly modListAssembly = AppDomain.CurrentDomain.GetAssemblies()
-                    .FirstOrDefault(asm => asm.GetTypes().Any(t => t.FullName != null && t.FullName.Contains("ModList.ModListManager")));
+                Assembly modListAssembly = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try
+                    {
+                        // 使用GetExportedTypes，避开Il2Cpp内部无法加载的类型
+                        var types = asm.GetExportedTypes();
+                        if (types.Any(t => t.FullName != null && t.FullName == "ModList.ModListManager"))
+                        {
+                            modListAssembly = asm;
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // 跳过会抛TypeLoad异常的程序集
+                    }
+                }
 
                 if (modListAssembly == null)
                 {
@@ -44,8 +59,9 @@ namespace BlockPlayerStatusReport
                 }
                 Log.LogInfo($"[{PluginInfo.Name}] Found ModListManager");
 
-                // 获取向外广播Mod列表的方法 BroadcastMods
-                MethodInfo broadcastMethod = modListManagerType.GetMethod("BroadcastMods", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo broadcastMethod = modListManagerType.GetMethod("BroadcastMods",
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+
                 if (broadcastMethod == null)
                 {
                     Log.LogError($"[{PluginInfo.Name}] BroadcastMods method not found");
@@ -54,7 +70,8 @@ namespace BlockPlayerStatusReport
                 Log.LogInfo($"[{PluginInfo.Name}] Found BroadcastMods");
 
                 Harmony harmony = new Harmony(PluginInfo.GUID);
-                MethodInfo prefixHook = typeof(Plugin).GetMethod(nameof(BroadcastModsPrefix), BindingFlags.Public | BindingFlags.Static);
+                MethodInfo prefixHook = typeof(Plugin).GetMethod(nameof(BroadcastModsPrefix),
+                    BindingFlags.Public | BindingFlags.Static);
                 harmony.Patch(broadcastMethod, prefix: new HarmonyMethod(prefixHook));
 
                 Log.LogInfo($"[{PluginInfo.Name}] Patch applied success");
@@ -65,10 +82,6 @@ namespace BlockPlayerStatusReport
             }
         }
 
-        /// <summary>
-        /// Harmony Prefix钩子
-        /// return false：阻止原始BroadcastMods执行，不会发出Localia.ModList.Sync网络包
-        /// </summary>
         public static bool BroadcastModsPrefix()
         {
             Plugin.LogInstance?.LogInfo("[BlockReport] Blocked ModList BroadcastMods, skip sending mod list to others");
