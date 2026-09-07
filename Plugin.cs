@@ -12,7 +12,7 @@ namespace BlockPlayerStatusReport
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
-        internal static ManualLogSource Log;
+        private static ManualLogSource _log;
         private static Harmony _harmony;
         private static bool _patched;
 
@@ -34,12 +34,12 @@ namespace BlockPlayerStatusReport
 
         public override void Load()
         {
-            Log = Logger;
-            Log.LogInfo($"{PluginInfo.Name} v{PluginInfo.Version} loading...");
+            _log = Log;
+            _log.LogInfo($"{PluginInfo.Name} v{PluginInfo.Version} loading...");
 
             if (_patched)
             {
-                Log.LogWarning("Already patched, skipping load");
+                _log.LogWarning("Already patched, skipping load");
                 return;
             }
 
@@ -54,7 +54,7 @@ namespace BlockPlayerStatusReport
 
                 if (networkApi == null || channelType == null || playerType == null)
                 {
-                    Log.LogError("Failed to resolve required runtime types, patch aborted");
+                    _log.LogError("Failed to resolve required runtime types, patch aborted");
                     return;
                 }
 
@@ -76,16 +76,16 @@ namespace BlockPlayerStatusReport
                     new[] { typeof(string), typeof(byte[]), enumerablePlayer, channelType },
                     nameof(Prefix_MultiTarget)) ? 1 : 0;
 
-                Log.LogInfo($"Patch finished: {success}/3 overloads applied");
+                _log.LogInfo($"Patch finished: {success}/3 overloads applied");
                 _patched = success > 0;
 
                 if (success == 0)
-                    Log.LogError("All patches failed, mod will not function");
+                    _log.LogError("All patches failed, mod will not function");
             }
             catch (Exception ex)
             {
-                Log.LogError($"Fatal load error: {ex.Message}");
-                Log.LogDebug(ex.StackTrace);
+                _log.LogError($"Fatal load error: {ex.Message}");
+                _log.LogDebug(ex.StackTrace);
             }
         }
 
@@ -97,13 +97,13 @@ namespace BlockPlayerStatusReport
                 {
                     _harmony.UnpatchSelf();
                     _patched = false;
-                    Log.LogInfo("All patches removed successfully");
+                    _log.LogInfo("All patches removed successfully");
                 }
                 return true;
             }
             catch (Exception ex)
             {
-                Log.LogWarning($"Unload error: {ex.Message}");
+                _log.LogWarning($"Unload error: {ex.Message}");
                 return false;
             }
         }
@@ -119,7 +119,7 @@ namespace BlockPlayerStatusReport
                 MethodBase target = AccessTools.Method(type, methodName, paramTypes);
                 if (target == null)
                 {
-                    Log.LogWarning($"Method not found: {type.Name}.{methodName}");
+                    _log.LogWarning($"Method not found: {type.Name}.{methodName}");
                     return false;
                 }
 
@@ -128,8 +128,8 @@ namespace BlockPlayerStatusReport
             }
             catch (Exception ex)
             {
-                Log.LogWarning($"Patch failed [{methodName}]: {ex.Message}");
-                Log.LogDebug(ex.StackTrace);
+                _log.LogWarning($"Patch failed [{methodName}]: {ex.Message}");
+                _log.LogDebug(ex.StackTrace);
                 return false;
             }
         }
@@ -143,7 +143,7 @@ namespace BlockPlayerStatusReport
 
             if (eventName.Equals(Const.BlockEvent, StringComparison.Ordinal))
             {
-                Log.LogDebug($"Blocked ModList.Sync ({scenario})");
+                _log.LogDebug($"Blocked ModList.Sync ({scenario})");
                 return false; // 丢弃数据包
             }
             return true; // 放行其他事件
