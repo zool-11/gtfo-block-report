@@ -1,10 +1,10 @@
-using System;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
-using MonoMod.RuntimeDetour;
+using HarmonyLib;
 using GTFO.API;
+using HarmonyLib.Public.Patching;
 
 namespace BlockPlayerStatusReport
 {
@@ -13,7 +13,6 @@ namespace BlockPlayerStatusReport
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource LogInstance;
-        private static IDetour _detour;
 
         public static class PluginInfo
         {
@@ -46,30 +45,34 @@ namespace BlockPlayerStatusReport
                 Log.LogError($"[{PluginInfo.Name}] 找不到NetworkAPI.InvokeEvent，拦截失效！");
                 return;
             }
-            Log.LogInfo($"[{PluginInfo.Name}] 准备MonoMod detour挂钩");
 
-            _detour = new Detour(
-                target: targetMethod,
-                hook: Hook_InvokeEvent
-            );
-            _detour.Apply();
-            Log.LogInfo($"[{PluginInfo.Name}] Detour挂钩成功");
+            // 使用ManualPatch，绕开Prefix泛型AOT问题
+            var harmony = new Harmony(PluginInfo.GUID);
+            var manualPatch = new ManualPatch(targetMethod, PatchLogic.Patch);
+            ManualPatchManager.Register(targetMethod, manualPatch);
+            harmony.Patch(targetMethod);
+            Log.LogInfo($"[{PluginInfo.Name}] ManualPatch补丁挂载成功");
         }
+    }
 
-        private static void Hook_InvokeEvent(Action<string, object, object> orig, string eventName, object payload, object target)
+    public static class PatchLogic
+    {
+        /// <summary>
+        /// ManualPatch回调，原始方法被调用时进入这里
+        /// </summary>
+        public static bool Patch(object[] args)
         {
-            if(eventName == "Localia.ModList.Sync")
+            if(args == null || args.Length == 0)
+                return true;
+
+            string eventName = args[0] as string;
+            if (eventName == "Localia.ModList.Sync")
             {
-                LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
-                return;
+                Plugin.LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
+                // 返回false = 不执行原始函数，阻断发包
+                return false;
             }
-            orig.Invoke(eventName, payload, target);
-        }
-
-        public override bool Unload()
-        {
-            _detour?.Undo();
-            _detour?.Dispose();
+            // 返回true = 执行原始函数
             return true;
         }
     }
