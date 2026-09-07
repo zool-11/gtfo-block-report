@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using HarmonyLib;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
@@ -31,14 +30,22 @@ namespace BlockPlayerStatusReport
                 _harmonyInstance = new Harmony(PluginInfo.GUID);
                 int successCount = 0;
 
-                // 重载1：全局广播
+                // 重载1：全局广播 (string eventName, byte[] payload, SNet_ChannelType channelType)
                 try
                 {
-                    _harmonyInstance.Patch(
-                        original: AccessTools.Method(typeof(GTFO.API.NetworkAPI), nameof(GTFO.API.NetworkAPI.InvokeFreeSizedEvent),
-                            new[] { typeof(string), typeof(byte[]), typeof(SNet_ChannelType) }),
-                        prefix: new HarmonyMethod(typeof(Plugin), nameof(OnBroadcastPrefix))
+                    var target = new HarmonyMethod(
+                        null,
+                        "GTFO.API.NetworkAPI, GTFO-API",
+                        "InvokeFreeSizedEvent",
+                        new []
+                        {
+                            "System.String",
+                            "System.Byte[]",
+                            "SNet_ChannelType"
+                        }
                     );
+                    var prefix = new HarmonyMethod(typeof(Plugin), nameof(OnBroadcastPrefix));
+                    _harmonyInstance.Patch(target, prefix);
                     successCount++;
                 }
                 catch (Exception ex)
@@ -46,14 +53,23 @@ namespace BlockPlayerStatusReport
                     Log.LogError($"[{PluginInfo.Name}] Failed to patch broadcast overload: {ex.Message}");
                 }
 
-                // 重载2：指定单个玩家
+                // 重载2：指定单个玩家 (string eventName, byte[] payload, SNet_Player target, SNet_ChannelType channelType)
                 try
                 {
-                    _harmonyInstance.Patch(
-                        original: AccessTools.Method(typeof(GTFO.API.NetworkAPI), nameof(GTFO.API.NetworkAPI.InvokeFreeSizedEvent),
-                            new[] { typeof(string), typeof(byte[]), typeof(SNet_Player), typeof(SNet_ChannelType) }),
-                        prefix: new HarmonyMethod(typeof(Plugin), nameof(OnTargetPrefix))
+                    var target = new HarmonyMethod(
+                        null,
+                        "GTFO.API.NetworkAPI, GTFO-API",
+                        "InvokeFreeSizedEvent",
+                        new []
+                        {
+                            "System.String",
+                            "System.Byte[]",
+                            "SNet_Player",
+                            "SNet_ChannelType"
+                        }
                     );
+                    var prefix = new HarmonyMethod(typeof(Plugin), nameof(OnTargetPrefix));
+                    _harmonyInstance.Patch(target, prefix);
                     successCount++;
                 }
                 catch (Exception ex)
@@ -61,14 +77,23 @@ namespace BlockPlayerStatusReport
                     Log.LogError($"[{PluginInfo.Name}] Failed to patch target overload: {ex.Message}");
                 }
 
-                // 重载3：指定多个玩家
+                // 重载3：指定多个玩家 (string eventName, byte[] payload, IEnumerable<SNet_Player> targets, SNet_ChannelType channelType)
                 try
                 {
-                    _harmonyInstance.Patch(
-                        original: AccessTools.Method(typeof(GTFO.API.NetworkAPI), nameof(GTFO.API.NetworkAPI.InvokeFreeSizedEvent),
-                            new[] { typeof(string), typeof(byte[]), typeof(IEnumerable<SNet_Player>), typeof(SNet_ChannelType) }),
-                        prefix: new HarmonyMethod(typeof(Plugin), nameof(OnMultiTargetPrefix))
+                    var target = new HarmonyMethod(
+                        null,
+                        "GTFO.API.NetworkAPI, GTFO-API",
+                        "InvokeFreeSizedEvent",
+                        new []
+                        {
+                            "System.String",
+                            "System.Byte[]",
+                            "System.Collections.Generic.IEnumerable`1[SNet_Player]",
+                            "SNet_ChannelType"
+                        }
                     );
+                    var prefix = new HarmonyMethod(typeof(Plugin), nameof(OnMultiTargetPrefix));
+                    _harmonyInstance.Patch(target, prefix);
                     successCount++;
                 }
                 catch (Exception ex)
@@ -105,7 +130,7 @@ namespace BlockPlayerStatusReport
 
         #region 拦截逻辑
         // 广播场景拦截
-        private static bool OnBroadcastPrefix(string eventName, byte[] payload, SNet_ChannelType channelType)
+        private static bool OnBroadcastPrefix(string eventName, byte[] payload, object channelType)
         {
             if (string.IsNullOrEmpty(eventName))
                 return true;
@@ -113,13 +138,13 @@ namespace BlockPlayerStatusReport
             if (eventName == "Localia.ModList.Sync")
             {
                 LogInstance.LogDebug("[BlockReport] Dropped ModList.Sync (broadcast)");
-                return false; // 终止原始方法，丢弃数据包
+                return false;
             }
-            return true; // 放行其他所有事件
+            return true;
         }
 
         // 单发场景拦截
-        private static bool OnTargetPrefix(string eventName, byte[] payload, SNet_Player target, SNet_ChannelType channelType)
+        private static bool OnTargetPrefix(string eventName, byte[] payload, object target, object channelType)
         {
             if (string.IsNullOrEmpty(eventName))
                 return true;
@@ -133,7 +158,7 @@ namespace BlockPlayerStatusReport
         }
 
         // 群发场景拦截
-        private static bool OnMultiTargetPrefix(string eventName, byte[] payload, IEnumerable<SNet_Player> targets, SNet_ChannelType channelType)
+        private static bool OnMultiTargetPrefix(string eventName, byte[] payload, object targets, object channelType)
         {
             if (string.IsNullOrEmpty(eventName))
                 return true;
