@@ -10,7 +10,7 @@ namespace BlockModListSync
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
     [BepInDependency("localia.core", BepInDependency.DependencyFlags.HardDependency)]
-    public class Plugin : BasePlugin
+    public class Plugin : PluginBase
     {
         internal static ManualLogSource Logger;
         private static Harmony _harmony;
@@ -28,7 +28,7 @@ namespace BlockModListSync
         {
             Logger = base.Log;
             Logger.LogInfo("========================================");
-            Logger.LogInfo("  BlockModListSync 最终编译版 加载中");
+            Logger.LogInfo("  BlockModListSync 最终编译修复版");
             Logger.LogInfo("========================================");
 
             _harmony = new Harmony(PluginInfo.GUID);
@@ -169,7 +169,7 @@ namespace BlockModListSync
     {
         public const string GUID = "dev.blockmodlistsync";
         public const string Name = "BlockModListSync";
-        public const string Version = "4.2.2";
+        public const string Version = "4.2.3";
     }
 
     public static class Patches
