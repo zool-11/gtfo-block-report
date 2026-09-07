@@ -10,7 +10,6 @@ namespace BlockModListSync
 {
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
-    // 移除硬依赖，避免GUID不匹配导致加载失败
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource Logger;
@@ -29,13 +28,15 @@ namespace BlockModListSync
         {
             Logger = base.Log;
             Logger.LogInfo("========================================");
-            Logger.LogInfo("  BlockModListSync 依赖修复最终版");
+            Logger.LogInfo("  BlockModListSync 方案二 功能兼容版");
+            Logger.LogInfo("  己方：可正常查看所有玩家模组列表");
+            Logger.LogInfo("  对方：检测到核心，但永远加载不出列表");
             Logger.LogInfo("========================================");
 
             _harmony = new Harmony(PluginInfo.GUID);
             AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
 
-            // 扫描已加载的程序集，兼容LocaliaCore先加载的情况
+            // 扫描已加载程序集，兼容 LocaliaCore 先加载的情况
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 TryPatch(asm);
         }
@@ -52,7 +53,6 @@ namespace BlockModListSync
             _patched = true;
             Logger.LogInfo("========================================");
             Logger.LogInfo("  ✅ 全链路伪装补丁应用完成");
-            Logger.LogInfo("  对方视角：MOD: UNKNOWN（与纯原版一致）");
             Logger.LogInfo("========================================");
         }
 
@@ -80,19 +80,10 @@ namespace BlockModListSync
             Logger.LogInfo(_coreVer != null ? "  ✅ Core_VersionString" : "  ❌ Core_VersionString 丢失");
             #endregion
 
-            #region ========== 第1层：核心探测彻底屏蔽 ==========
-            Logger.LogInfo("--- 第1层：核心探测屏蔽 ---");
+            #region ========== 第1层：广播计数控制 ==========
+            Logger.LogInfo("--- 第1层：广播计数控制 ---");
 
-            // 1.1 拦截所有A2s信号发送（单发+广播+重试全场景）
-            MethodInfo sendA2s = netType.GetMethod("sendA2s_Info", ALL);
-            if (sendA2s != null)
-            {
-                _harmony.Patch(sendA2s, prefix: new HarmonyMethod(typeof(Patches).GetMethod("Block_SendA2s", ALL)));
-                Logger.LogInfo("  ✅ sendA2s_Info 全场景拦截");
-            }
-            else Logger.LogWarning("  ⚠️ sendA2s_Info 未找到");
-
-            // 1.2 进房后置清零广播计数，彻底终止广播循环
+            // 进房后置清零广播计数，减少冗余广播
             MethodInfo addSlot = netType.GetMethod("addSlotLookup", ALL);
             if (addSlot != null)
             {
@@ -101,7 +92,7 @@ namespace BlockModListSync
             }
             else Logger.LogWarning("  ⚠️ addSlotLookup 未找到");
 
-            // 1.3 初始清零兜底
+            // 初始广播计数清零兜底
             FieldInfo broadcast = monType.GetField("boardcastAvaliable", ALL);
             if (broadcast != null)
             {
@@ -111,20 +102,8 @@ namespace BlockModListSync
             else Logger.LogWarning("  ⚠️ boardcastAvaliable 未找到");
             #endregion
 
-            #region ========== 第2层：核心信息数量伪装 ==========
-            Logger.LogInfo("--- 第2层：核心数量伪装 ---");
-
-            MethodInfo sendCore = netType.GetMethod("sendCoreInfo", ALL);
-            if (sendCore != null)
-            {
-                _harmony.Patch(sendCore, prefix: new HarmonyMethod(typeof(Patches).GetMethod("Prefix_SendCoreInfo", ALL)));
-                Logger.LogInfo("  ✅ sendCoreInfo 强制数量为0");
-            }
-            else Logger.LogWarning("  ⚠️ sendCoreInfo 未找到");
-            #endregion
-
-            #region ========== 第3层：列表请求接收层拦截 ==========
-            Logger.LogInfo("--- 第3层：请求接收屏蔽 ---");
+            #region ========== 第2层：列表请求接收拦截 ==========
+            Logger.LogInfo("--- 第2层：列表请求拦截 ---");
 
             MethodInfo onRecvGet = netType.GetMethod("onRecv_GetModList", ALL);
             if (onRecvGet != null)
@@ -135,8 +114,8 @@ namespace BlockModListSync
             else Logger.LogWarning("  ⚠️ onRecv_GetModList 未找到");
             #endregion
 
-            #region ========== 第4层：模组明细发送拦截 ==========
-            Logger.LogInfo("--- 第4层：明细发送拦截 ---");
+            #region ========== 第3层：模组明细发送拦截 ==========
+            Logger.LogInfo("--- 第3层：明细发送拦截 ---");
 
             MethodInfo sendModList = netType.GetMethod("sendModListData", ALL);
             if (sendModList != null)
@@ -147,8 +126,8 @@ namespace BlockModListSync
             else Logger.LogWarning("  ⚠️ sendModListData 未找到");
             #endregion
 
-            #region ========== 第5层：发送缓冲根源清空 ==========
-            Logger.LogInfo("--- 第5层：发送缓冲清空 ---");
+            #region ========== 第4层：发送缓冲根源清空 ==========
+            Logger.LogInfo("--- 第4层：发送缓冲清空 ---");
 
             FieldInfo buf = netType.GetField("myModListBuffer", ALL);
             if (buf != null)
@@ -156,6 +135,7 @@ namespace BlockModListSync
                 buf.SetValue(null, new Dictionary<uint, string>());
                 Logger.LogInfo("  ✅ 压缩发送缓冲已清空");
             }
+            else Logger.LogWarning("  ⚠️ myModListBuffer 未找到");
 
             FieldInfo bufRaw = netType.GetField("myModListBuffer_raw", ALL);
             if (bufRaw != null)
@@ -163,6 +143,7 @@ namespace BlockModListSync
                 bufRaw.SetValue(null, new Dictionary<uint, string>());
                 Logger.LogInfo("  ✅ 原始发送缓冲已清空");
             }
+            else Logger.LogWarning("  ⚠️ myModListBuffer_raw 未找到");
             #endregion
         }
     }
@@ -171,18 +152,11 @@ namespace BlockModListSync
     {
         public const string GUID = "dev.blockmodlistsync";
         public const string Name = "BlockModListSync";
-        public const string Version = "4.2.8";
+        public const string Version = "4.3.0";
     }
 
     public static class Patches
     {
-        // 第1层：拦截所有A2s核心探测信号
-        public static bool Block_SendA2s(object[] __args)
-        {
-            Plugin.Logger.LogDebug("[拦截] 阻止发送 A2s 核心探测信号");
-            return false;
-        }
-
         // 第1层：进房后置清零广播计数
         public static void Postfix_AddSlot()
         {
@@ -198,40 +172,14 @@ namespace BlockModListSync
             }
         }
 
-        // 第2层：核心信息伪装，强制返回0个模组
-        public static bool Prefix_SendCoreInfo(int slot)
-        {
-            try
-            {
-                object instance = null;
-                int chalNum = (int)Plugin._myChalNum.GetValue(instance);
-                object slotArray = Plugin._slotSNet.GetValue(instance);
-                object target = Plugin._arrGet.Invoke(slotArray, new object[] { slot });
-                
-                string header = (string)Plugin._makeHeader.Invoke(instance, new object[] { 1, false, false });
-                string version = (string)Plugin._coreVer.Invoke(null, null);
-                
-                string content = $"{header}{chalNum};0;{version}";
-                Plugin._send.Invoke(instance, new[] { target, 1, content, 0u, true });
-                
-                Plugin.Logger.LogDebug($"[伪装] 槽位{slot} 核心信息已发送（数量强制为0）");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Plugin.Logger.LogWarning($"[异常] sendCoreInfo 拦截失败，执行原生: {ex.Message}");
-                return true;
-            }
-        }
-
-        // 第3层：收到对方模组列表请求，直接丢弃
+        // 第2层：收到对方模组列表请求，直接丢弃不响应
         public static bool Block_RecvRequest(object[] __args)
         {
             Plugin.Logger.LogDebug("[拦截] 丢弃对方的模组列表请求");
             return false;
         }
 
-        // 第4层：拦截模组明细分片发送
+        // 第3层：拦截模组明细分片发送，不返回任何模组数据
         public static bool Block_SendModList(object[] __args)
         {
             Plugin.Logger.LogDebug("[拦截] 阻止发送模组明细分片");
