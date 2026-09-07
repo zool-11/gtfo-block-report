@@ -27,30 +27,17 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                Assembly modListAssembly = null;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    try
-                    {
-                        // 使用GetExportedTypes，避开Il2Cpp内部无法加载的类型
-                        var types = asm.GetExportedTypes();
-                        if (types.Any(t => t.FullName != null && t.FullName == "ModList.ModListManager"))
-                        {
-                            modListAssembly = asm;
-                            break;
-                        }
-                    }
-                    catch
-                    {
-                        // 跳过会抛TypeLoad异常的程序集
-                    }
-                }
+                // 根据程序集名称找ModList，ModList.dll的AssemblyName就是ModList
+                Assembly modListAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(asm => asm.GetName().Name == "ModList");
 
                 if (modListAssembly == null)
                 {
                     Log.LogError($"[{PluginInfo.Name}] ModList assembly not found, mod disabled");
                     return;
                 }
+                Log.LogInfo($"[{PluginInfo.Name}] Found ModList assembly");
+
                 Type modListManagerType = modListAssembly.GetType("ModList.ModListManager");
                 if (modListManagerType == null)
                 {
