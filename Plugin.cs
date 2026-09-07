@@ -17,19 +17,19 @@ namespace BlockModListSync
         private static Harmony _harmony;
         private static bool _patched = false;
 
-        // 反射缓存
-        private static FieldInfo _myChalNum;
-        private static FieldInfo _slotSNet;
-        private static MethodInfo _makeHeader;
-        private static MethodInfo _send;
-        private static MethodInfo _coreVer;
-        private static MethodInfo _arrGet;
+        // 反射缓存 - 改为internal，同程序集Patches类可访问
+        internal static FieldInfo _myChalNum;
+        internal static FieldInfo _slotSNet;
+        internal static MethodInfo _makeHeader;
+        internal static MethodInfo _send;
+        internal static MethodInfo _coreVer;
+        internal static MethodInfo _arrGet;
 
         public override void Load()
         {
             Logger = base.Log;
             Logger.LogInfo("========================================");
-            Logger.LogInfo("  BlockModListSync 最终编译版");
+            Logger.LogInfo("  BlockModListSync 权限修复最终版");
             Logger.LogInfo("========================================");
 
             _harmony = new Harmony(PluginInfo.GUID);
@@ -170,7 +170,7 @@ namespace BlockModListSync
     {
         public const string GUID = "dev.blockmodlistsync";
         public const string Name = "BlockModListSync";
-        public const string Version = "4.2.6";
+        public const string Version = "4.2.7";
     }
 
     public static class Patches
