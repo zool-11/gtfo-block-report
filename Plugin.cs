@@ -28,11 +28,11 @@ namespace BlockPlayerStatusReport
 
             MethodInfo targetMethod = null;
             var methods = typeof(NetworkAPI).GetMethods(BindingFlags.Public | BindingFlags.Static);
-            foreach(var m in methods)
+            foreach (var m in methods)
             {
-                if(m.Name != "InvokeEvent") continue;
+                if (m.Name != "InvokeEvent") continue;
                 var pars = m.GetParameters();
-                if(pars.Length >= 1 && pars[0].ParameterType == typeof(string))
+                if (pars.Length >= 1 && pars[0].ParameterType == typeof(string))
                 {
                     targetMethod = m;
                     Log.LogInfo($"[Debug]选中InvokeEvent，参数个数:{pars.Length}");
@@ -46,33 +46,39 @@ namespace BlockPlayerStatusReport
                 return;
             }
 
-            // 使用ManualPatch，绕开Prefix泛型AOT问题
             var harmony = new Harmony(PluginInfo.GUID);
-            var manualPatch = new ManualPatch(targetMethod, PatchLogic.Patch);
+            var manualPatch = new ManualPatch(targetMethod, PatchHandler.OnInvoke);
             ManualPatchManager.Register(targetMethod, manualPatch);
             harmony.Patch(targetMethod);
-            Log.LogInfo($"[{PluginInfo.Name}] ManualPatch补丁挂载成功");
+            Log.LogInfo($"[{PluginInfo.Name}] ManualPatch挂载完成");
         }
     }
 
-    public static class PatchLogic
+    public static class PatchHandler
     {
         /// <summary>
-        /// ManualPatch回调，原始方法被调用时进入这里
+        /// ManualPatch回调
+        /// args[0] = eventName
+        /// args[1] = payload(mod列表数据)
+        /// args[2] = NetworkTarget发送目标
+        /// return false = 阻止原始函数执行，阻断发包
+        /// return true = 放行原始函数
         /// </summary>
-        public static bool Patch(object[] args)
+        public static bool OnInvoke(object[] args)
         {
-            if(args == null || args.Length == 0)
+            if (args == null || args.Length == 0)
+            {
                 return true;
+            }
 
             string eventName = args[0] as string;
             if (eventName == "Localia.ModList.Sync")
             {
                 Plugin.LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
-                // 返回false = 不执行原始函数，阻断发包
+                // 阻断向外广播ModList数据包
                 return false;
             }
-            // 返回true = 执行原始函数
+            // 其余全部网络事件原样放行
             return true;
         }
     }
