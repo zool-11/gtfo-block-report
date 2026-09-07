@@ -4,7 +4,7 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
-using MonoMod.RuntimeDetour;
+using HarmonyLib;
 
 namespace BlockPlayerStatusReport
 {
@@ -13,8 +13,6 @@ namespace BlockPlayerStatusReport
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource LogInstance;
-        private Detour _invokeDetour;
-        private DetourInfo _detourInfo;
 
         public static class PluginInfo
         {
@@ -29,42 +27,37 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                Type networkApiType = AppDomain.CurrentDomain.GetAssemblies()
-                    .Select(asm => asm.GetType("GTFO.API.NetworkAPI"))
-                    .FirstOrDefault(t => t != null);
+                // 在已加载程序集查找ModList，不硬编码程序集名称
+                Assembly modListAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(asm => asm.GetTypes().Any(t => t.FullName != null && t.FullName.Contains("ModList.ModListManager")));
 
-                if (networkApiType == null)
+                if (modListAssembly == null)
                 {
-                    Log.LogError($"[{PluginInfo.Name}] Cannot find GTFO.API.NetworkAPI, mod disabled");
+                    Log.LogError($"[{PluginInfo.Name}] ModList assembly not found, mod disabled");
                     return;
                 }
-                Log.LogInfo($"[{PluginInfo.Name}] Got NetworkAPI type");
-
-                MethodInfo targetInvokeEvent = null;
-                foreach (var m in networkApiType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                Type modListManagerType = modListAssembly.GetType("ModList.ModListManager");
+                if (modListManagerType == null)
                 {
-                    if (m.Name != "InvokeEvent") continue;
-                    ParameterInfo[] pars = m.GetParameters();
-                    if (pars.Length >= 3 && pars[0].ParameterType == typeof(string))
-                    {
-                        targetInvokeEvent = m;
-                        Log.LogInfo($"[{PluginInfo.Name}] Found InvokeEvent, param count:{pars.Length}");
-                        break;
-                    }
-                }
-
-                if (targetInvokeEvent == null)
-                {
-                    Log.LogError($"[{PluginInfo.Name}] InvokeEvent not found, mod disabled");
+                    Log.LogError($"[{PluginInfo.Name}] ModListManager type not found");
                     return;
                 }
+                Log.LogInfo($"[{PluginInfo.Name}] Found ModListManager");
 
-                MethodInfo hookMethod = typeof(Plugin).GetMethod(nameof(InvokeHook), BindingFlags.NonPublic | BindingFlags.Static);
-                _detourInfo = DetourInfo.FromSignature(targetInvokeEvent, hookMethod);
-                _invokeDetour = new Detour(_detourInfo);
-                _invokeDetour.Apply();
+                // 获取向外广播Mod列表的方法 BroadcastMods
+                MethodInfo broadcastMethod = modListManagerType.GetMethod("BroadcastMods", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                if (broadcastMethod == null)
+                {
+                    Log.LogError($"[{PluginInfo.Name}] BroadcastMods method not found");
+                    return;
+                }
+                Log.LogInfo($"[{PluginInfo.Name}] Found BroadcastMods");
 
-                Log.LogInfo($"[{PluginInfo.Name}] Detour applied success");
+                Harmony harmony = new Harmony(PluginInfo.GUID);
+                MethodInfo prefixHook = typeof(Plugin).GetMethod(nameof(BroadcastModsPrefix), BindingFlags.Public | BindingFlags.Static);
+                harmony.Patch(broadcastMethod, prefix: new HarmonyMethod(prefixHook));
+
+                Log.LogInfo($"[{PluginInfo.Name}] Patch applied success");
             }
             catch (Exception ex)
             {
@@ -73,24 +66,13 @@ namespace BlockPlayerStatusReport
         }
 
         /// <summary>
-        /// Detour钩子，参数顺序：orig放在第一个，后面跟随原方法全部参数
+        /// Harmony Prefix钩子
+        /// return false：阻止原始BroadcastMods执行，不会发出Localia.ModList.Sync网络包
         /// </summary>
-        private static void InvokeHook(Action<object[], object> orig, string eventName, object payload, object target)
+        public static bool BroadcastModsPrefix()
         {
-            if (eventName == "Localia.ModList.Sync")
-            {
-                Plugin.LogInstance?.LogInfo("[BlockReport] Blocked Localia.ModList.Sync network send");
-                // 直接return，不调用原方法，丢弃网络包
-                return;
-            }
-            orig.Invoke(new object[] { eventName, payload, target }, null);
-        }
-
-        public override bool Unload()
-        {
-            _invokeDetour?.Undo();
-            _invokeDetour?.Dispose();
-            return true;
+            Plugin.LogInstance?.LogInfo("[BlockReport] Blocked ModList BroadcastMods, skip sending mod list to others");
+            return false;
         }
     }
 }
