@@ -20,10 +20,13 @@ namespace BlockModListSync
         }
 
         private static Harmony _harmony;
+        // 静态日志引用，供静态钩子方法调用
+        private static ManualLogSource s_log;
 
         public override void Load()
         {
-            Log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} loading...");
+            s_log = Log;
+            s_log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} loading...");
 
             try
             {
@@ -36,7 +39,7 @@ namespace BlockModListSync
 
                 if (networkApi == null)
                 {
-                    Log.LogError("NetworkAPI type not found, abort patch");
+                    s_log.LogError("NetworkAPI type not found, abort patch");
                     return;
                 }
 
@@ -66,12 +69,12 @@ namespace BlockModListSync
                     new[] { typeof(string), typeof(byte[]), enumerablePlayer, channelType },
                     nameof(Prefix_Sized_Multi));
 
-                Log.LogInfo("Debug patch applied: ALL network events will be logged");
+                s_log.LogInfo("Debug patch applied: ALL network events will be logged");
             }
             catch (Exception ex)
             {
-                Log.LogError($"Load error: {ex.Message}");
-                Log.LogDebug(ex.StackTrace);
+                s_log.LogError($"Load error: {ex.Message}");
+                s_log.LogDebug(ex.StackTrace);
             }
         }
 
@@ -95,34 +98,34 @@ namespace BlockModListSync
                 MethodBase target = AccessTools.Method(type, methodName, paramTypes);
                 if (target == null)
                 {
-                    Log.LogWarning($"Method not found: {methodName} [{paramTypes.Length} params]");
+                    s_log.LogWarning($"Method not found: {methodName} [{paramTypes.Length} params]");
                     return;
                 }
                 _harmony.Patch(target, prefix: new HarmonyMethod(GetType(), prefixName));
-                Log.LogInfo($"Patched: {methodName} [{paramTypes.Length} params]");
+                s_log.LogInfo($"Patched: {methodName} [{paramTypes.Length} params]");
             }
             catch (Exception ex)
             {
-                Log.LogWarning($"Patch failed {methodName}: {ex.Message}");
+                s_log.LogWarning($"Patch failed {methodName}: {ex.Message}");
             }
         }
 
         #region FreeSized 调试钩子
         private static bool Prefix_Free_Broadcast(string eventName, byte[] payload, object channelType)
         {
-            Log.LogInfo($"[FREE] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
+            s_log.LogInfo($"[FREE] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
             return true; // 放行，仅打印日志
         }
 
         private static bool Prefix_Free_Single(string eventName, byte[] payload, object target, object channelType)
         {
-            Log.LogInfo($"[FREE] [Single] {eventName} | size: {payload?.Length ?? 0}");
+            s_log.LogInfo($"[FREE] [Single] {eventName} | size: {payload?.Length ?? 0}");
             return true;
         }
 
         private static bool Prefix_Free_Multi(string eventName, byte[] payload, object targets, object channelType)
         {
-            Log.LogInfo($"[FREE] [Multi] {eventName} | size: {payload?.Length ?? 0}");
+            s_log.LogInfo($"[FREE] [Multi] {eventName} | size: {payload?.Length ?? 0}");
             return true;
         }
         #endregion
@@ -130,19 +133,19 @@ namespace BlockModListSync
         #region Sized 调试钩子
         private static bool Prefix_Sized_Broadcast(string eventName, byte[] payload, object channelType)
         {
-            Log.LogInfo($"[SIZED] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
+            s_log.LogInfo($"[SIZED] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
             return true;
         }
 
         private static bool Prefix_Sized_Single(string eventName, byte[] payload, object target, object channelType)
         {
-            Log.LogInfo($"[SIZED] [Single] {eventName} | size: {payload?.Length ?? 0}");
+            s_log.LogInfo($"[SIZED] [Single] {eventName} | size: {payload?.Length ?? 0}");
             return true;
         }
 
         private static bool Prefix_Sized_Multi(string eventName, byte[] payload, object targets, object channelType)
         {
-            Log.LogInfo($"[SIZED] [Multi] {eventName} | size: {payload?.Length ?? 0}");
+            s_log.LogInfo($"[SIZED] [Multi] {eventName} | size: {payload?.Length ?? 0}");
             return true;
         }
         #endregion
