@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
@@ -26,13 +27,17 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                // 运行时查找GTFO‑API，编译不引用
-                Type networkApiType = Type.GetType("GTFO.API.NetworkAPI, GTFO‑API");
+                // 遍历已经加载的程序集，找GTFO.API.NetworkAPI，不硬编码程序集名称
+                Type networkApiType = AppDomain.CurrentDomain.GetAssemblies()
+                    .Select(asm => asm.GetType("GTFO.API.NetworkAPI"))
+                    .FirstOrDefault(t => t != null);
+
                 if (networkApiType == null)
                 {
                     Log.LogError($"[{PluginInfo.Name}] Cannot find GTFO.API.NetworkAPI, mod disabled");
                     return;
                 }
+                Log.LogInfo($"[{PluginInfo.Name}] Got NetworkAPI type");
 
                 MethodInfo targetInvokeEvent = null;
                 foreach (var m in networkApiType.GetMethods(BindingFlags.Public | BindingFlags.Static))
@@ -53,7 +58,6 @@ namespace BlockPlayerStatusReport
                     return;
                 }
 
-                // 获取我们写好的Prefix方法，不再用SymbolExtensions带ref null的非法委托
                 MethodInfo prefixMethod = typeof(Plugin).GetMethod(nameof(InvokeEventPrefix), BindingFlags.Public | BindingFlags.Static);
                 HarmonyMethod harmonyPrefix = new HarmonyMethod(prefixMethod);
 
@@ -68,18 +72,11 @@ namespace BlockPlayerStatusReport
             }
         }
 
-        /// <summary>
-        /// Prefix签名：不使用ref修改参数（规避IL2CPP泛型+harmony参数改写双重坑）
-        /// 关键：绝不 return false 截断泛型方法！！！永远return true，规避AOT实例化报错
-        /// 限制：我们不再修改payload，改为【日志打印检测目标事件】，先过编译+日志排查阶段
-        /// 先确认：我们能不能捕获到 Localia.ModList.Sync 事件
-        /// </summary>
         public static bool InvokeEventPrefix(string eventName, object payload, object target)
         {
             if (eventName == "Localia.ModList.Sync")
             {
                 Plugin.LogInstance?.LogInfo("[BlockReport] DETECTED Localia.ModList.Sync is firing!");
-                // 现阶段只打印日志，不做阻断、不修改参数，优先确认钩子能不能命中事件
             }
             return true;
         }
