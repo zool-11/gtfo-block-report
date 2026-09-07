@@ -15,8 +15,7 @@ namespace BlockModListSync
         internal static ManualLogSource Log;
         private static Harmony _harmony;
 
-        // 缓存反射元数据，避免重复查找
-        private static Type _networkManagerType;
+        // 预缓存反射元数据
         private static FieldInfo _myChalNumField;
         private static FieldInfo _slotSNetField;
         private static MethodInfo _makeHeaderMethod;
@@ -49,41 +48,60 @@ namespace BlockModListSync
                     return;
                 }
 
-                // 2. 缓存所有需要的反射元数据
-                _networkManagerType = localiaAssembly.GetType("LocaliaCore.Network_Manager");
-                if (_networkManagerType == null)
+                // 2. 缓存所有反射元数据，失败则终止
+                Type networkType = localiaAssembly.GetType("LocaliaCore.Network_Manager");
+                if (networkType == null)
                 {
-                    Log.LogError("❌ 未找到 Network_Manager 类型，补丁加载终止");
+                    Log.LogError("❌ 未找到 Network_Manager 类型");
                     return;
                 }
 
-                _myChalNumField = _networkManagerType.GetField("myChalNum",
+                _myChalNumField = networkType.GetField("myChalNum",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-
-                _slotSNetField = _networkManagerType.GetField("slot_SNet",
+                _slotSNetField = networkType.GetField("slot_SNet",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-
-                _makeHeaderMethod = _networkManagerType.GetMethod("MakeHeader",
+                _makeHeaderMethod = networkType.GetMethod("MakeHeader",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-
-                _sendMethod = _networkManagerType.GetMethod("Send",
+                _sendMethod = networkType.GetMethod("Send",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
                 Type apiType = localiaAssembly.GetType("LocaliaCore.API");
                 _coreVersionMethod = apiType?.GetMethod("Core_VersionString",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
+                // 校验核心元数据完整性
+                if (_myChalNumField == null || _slotSNetField == null
+                    || _makeHeaderMethod == null || _sendMethod == null
+                    || _coreVersionMethod == null)
+                {
+                    Log.LogError("❌ 核心反射元数据不完整，补丁加载终止");
+                    return;
+                }
+
+                // 预缓存数组取值方法
+                object arrayInstance = _slotSNetField.GetValue(null);
+                if (arrayInstance != null)
+                {
+                    _arrayGetValueMethod = arrayInstance.GetType().GetMethod("GetValue", new Type[] { typeof(int) });
+                }
+
+                if (_arrayGetValueMethod == null)
+                {
+                    Log.LogError("❌ 数组取值方法获取失败");
+                    return;
+                }
+
                 // 3. 挂载补丁
                 _harmony = new Harmony(PluginInfo.GUID);
 
                 // 补丁1：拦截模组明细发送
-                MethodInfo sendModListMethod = _networkManagerType.GetMethod("sendModListData",
+                MethodInfo sendModList = networkType.GetMethod("sendModListData",
                     BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                if (sendModListMethod != null)
+                if (sendModList != null)
                 {
-                    MethodInfo prefixModList = typeof(Patches).GetMethod(nameof(Patches.Prefix_SendModListData),
+                    MethodInfo prefixMod = typeof(Patches).GetMethod(nameof(Patches.Prefix_SendModListData),
                         BindingFlags.Static | BindingFlags.Public);
-                    _harmony.Patch(sendModListMethod, prefix: new HarmonyMethod(prefixModList));
+                    _harmony.Patch(sendModList, prefix: new HarmonyMethod(prefixMod));
                     Log.LogInfo("✅ sendModListData 拦截成功");
                 }
                 else
@@ -92,13 +110,13 @@ namespace BlockModListSync
                 }
 
                 // 补丁2：核心信息模组数量置0
-                MethodInfo sendCoreInfoMethod = _networkManagerType.GetMethod("sendCoreInfo",
+                MethodInfo sendCoreInfo = networkType.GetMethod("sendCoreInfo",
                     BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                if (sendCoreInfoMethod != null)
+                if (sendCoreInfo != null)
                 {
-                    MethodInfo prefixCoreInfo = typeof(Patches).GetMethod(nameof(Patches.Prefix_SendCoreInfo),
+                    MethodInfo prefixCore = typeof(Patches).GetMethod(nameof(Patches.Prefix_SendCoreInfo),
                         BindingFlags.Static | BindingFlags.Public);
-                    _harmony.Patch(sendCoreInfoMethod, prefix: new HarmonyMethod(prefixCoreInfo));
+                    _harmony.Patch(sendCoreInfo, prefix: new HarmonyMethod(prefixCore));
                     Log.LogInfo("✅ sendCoreInfo 模组数量已置0");
                 }
                 else
@@ -106,18 +124,8 @@ namespace BlockModListSync
                     Log.LogWarning("⚠️ 未找到 sendCoreInfo 方法");
                 }
 
-                // 预缓存数组GetValue方法，运行时直接调用
-                if (_slotSNetField != null)
-                {
-                    object arrayInstance = _slotSNetField.GetValue(null);
-                    if (arrayInstance != null)
-                    {
-                        _arrayGetValueMethod = arrayInstance.GetType().GetMethod("GetValue", new Type[] { typeof(int) });
-                    }
-                }
-
                 Log.LogInfo("✅ 模组列表完全隐藏已生效");
-                Log.LogInfo("✅ 对方将直接显示 MOD: UNKNOWN，无加载过程");
+                Log.LogInfo("✅ 对方将直接显示 MOD: UNKNOWN");
                 Log.LogInfo("========================================");
             }
             catch (Exception ex)
@@ -147,48 +155,50 @@ namespace BlockModListSync
 
         /// <summary>
         /// 修改核心信息广播：模组数量强制置0
-        /// 对方收到后直接判定为无模组列表，不发起数据请求
+        /// 全链路空值校验，异常自动回退原生逻辑
         /// </summary>
         public static bool Prefix_SendCoreInfo(int slot)
         {
             try
             {
-                // 所有元数据已预缓存，直接使用，避免重复反射
-                if (Plugin._myChalNumField == null
-                    || Plugin._slotSNetField == null
-                    || Plugin._makeHeaderMethod == null
-                    || Plugin._sendMethod == null
-                    || Plugin._coreVersionMethod == null
-                    || Plugin._arrayGetValueMethod == null)
+                // 全量空值校验，任何一环失效立即回退
+                if (_myChalNumField == null || _slotSNetField == null
+                    || _makeHeaderMethod == null || _sendMethod == null
+                    || _coreVersionMethod == null || _arrayGetValueMethod == null)
                 {
                     return true;
                 }
 
                 // 获取本地校验码
-                int myChalNum = (int)Plugin._myChalNumField.GetValue(null);
+                int chalNum = (int)_myChalNumField.GetValue(null);
 
-                // 获取目标玩家连接实例
-                object slotSNetArray = Plugin._slotSNetField.GetValue(null);
-                object targetPlayer = Plugin._arrayGetValueMethod.Invoke(slotSNetArray, new object[] { slot });
+                // 获取目标连接实例
+                object slotArray = _slotSNetField.GetValue(null);
+                if (slotArray == null) return true;
+                
+                object target = _arrayGetValueMethod.Invoke(slotArray, new object[] { slot });
+                if (target == null) return true;
 
                 // 构造消息头
-                string header = (string)Plugin._makeHeaderMethod.Invoke(null, new object[] { 1, false, false });
+                string header = (string)_makeHeaderMethod.Invoke(null, new object[] { 1, false, false });
+                if (string.IsNullOrEmpty(header)) return true;
 
                 // 获取核心版本
-                string coreVersion = (string)Plugin._coreVersionMethod.Invoke(null, null);
+                string version = (string)_coreVersionMethod.Invoke(null, null);
+                if (string.IsNullOrEmpty(version)) return true;
 
-                // 核心修改：模组数量强制写 0
-                string content = $"{header}{myChalNum};0;{coreVersion}";
+                // 拼接数据包：模组数量强制写0
+                string content = $"{header}{chalNum};0;{version}";
 
                 // 发送修改后的数据包
-                Plugin._sendMethod.Invoke(null, new object[] { targetPlayer, 1, content, 0u, true });
+                _sendMethod.Invoke(null, new object[] { target, 1, content, 0u, true });
 
-                // 跳过原生方法执行
+                // 跳过原生方法
                 return false;
             }
             catch
             {
-                // 异常自动回退原生逻辑，优先保证连接稳定
+                // 任何异常都回退原生逻辑，优先保证连接稳定
                 return true;
             }
         }
