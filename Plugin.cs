@@ -3,6 +3,7 @@ using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using GTFO.API;
+using Il2CppSystem;
 
 namespace BlockPlayerStatusReport
 {
@@ -21,14 +22,20 @@ namespace BlockPlayerStatusReport
 
         public override void Load()
         {
-            Log.LogInfo($"[{PluginInfo.Name}] 已加载，拦截 PlayerStatusUpdate 网络事件");
+            Log.LogInfo($"[{PluginInfo.Name}] 已加载：拦截ModList向外上报mod列表");
             _harmony = new Harmony(PluginInfo.GUID);
 
             MethodInfo targetMethod = AccessTools.Method(
                 typeof(NetworkAPI),
                 "InvokeEvent",
-                new[] { typeof(string), typeof(object) }
+                new[] { typeof(string), typeof(Object) }
             );
+
+            if (targetMethod == null)
+            {
+                Log.LogError($"[{PluginInfo.Name}] 找不到NetworkAPI.InvokeEvent，拦截失效！");
+                return;
+            }
 
             HarmonyMethod prefixPatch = new HarmonyMethod(typeof(Patch), nameof(Patch.Prefix));
             _harmony.Patch(targetMethod, prefixPatch);
@@ -37,11 +44,11 @@ namespace BlockPlayerStatusReport
 
     public static class Patch
     {
-        public static bool Prefix(string eventName, object data)
+        public static bool Prefix(string eventName, Object data)
         {
-            // 返回 false = 阻止原函数执行；true = 放行事件
-            if (eventName == "PlayerStatusUpdate")
+            if (eventName == "Localia.ModList.Sync")
             {
+                Log.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
                 return false;
             }
             return true;
