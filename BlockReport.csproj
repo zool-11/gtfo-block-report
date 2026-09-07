@@ -19,6 +19,10 @@
     <Reference Include="GTFO-API">
       <HintPath>$(MSBuildThisFileDirectory)lib/GTFO-API.dll</HintPath>
     </Reference>
+    <Reference Include="LocaliaCore">
+    <HintPath>$(MSBuildThisFileDirectory)lib/LocaliaCore.dll</HintPath>
+</Reference>
+
   </ItemGroup>
 
 </Project>
