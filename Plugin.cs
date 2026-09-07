@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Collections.Generic;
 using HarmonyLib;
 using BepInEx;
+using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
 
 namespace BlockModListSync
@@ -10,7 +11,7 @@ namespace BlockModListSync
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
     [BepInDependency("localia.core", BepInDependency.DependencyFlags.HardDependency)]
-    public class Plugin : PluginBase
+    public class Plugin : BasePlugin
     {
         internal static ManualLogSource Logger;
         private static Harmony _harmony;
@@ -28,7 +29,7 @@ namespace BlockModListSync
         {
             Logger = base.Log;
             Logger.LogInfo("========================================");
-            Logger.LogInfo("  BlockModListSync 最终编译修复版");
+            Logger.LogInfo("  BlockModListSync 最终编译版");
             Logger.LogInfo("========================================");
 
             _harmony = new Harmony(PluginInfo.GUID);
@@ -169,7 +170,7 @@ namespace BlockModListSync
     {
         public const string GUID = "dev.blockmodlistsync";
         public const string Name = "BlockModListSync";
-        public const string Version = "4.2.3";
+        public const string Version = "4.2.6";
     }
 
     public static class Patches
@@ -181,7 +182,7 @@ namespace BlockModListSync
             return false;
         }
 
-        // 第1层：进房后置清零广播计数（运行时反射，无需编译时引用）
+        // 第1层：进房后置清零广播计数
         public static void Postfix_AddSlot()
         {
             Type monType = Type.GetType("LocaliaCore.LocaliaCore_Moniter, LocaliaCore");
