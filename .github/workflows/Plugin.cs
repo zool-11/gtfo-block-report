@@ -8,7 +8,7 @@ namespace BlockPlayerStatusReport
 {
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
-    public class Plugin : BaseUnityPlugin
+    public class Plugin : BasePlugin
     {
         public static class PluginInfo
         {
@@ -19,12 +19,12 @@ namespace BlockPlayerStatusReport
 
         private Harmony _harmony;
 
-        public void Awake()
+        public override void Load()
         {
             _harmony = new Harmony(PluginInfo.GUID);
-            MethodInfo targetMethod = AccessTools.Method(typeof(NetworkAPI), "InvokeEvent", new[] { typeof(string), typeof(object) });
-            HarmonyMethod prefix = new HarmonyMethod(typeof(Patch).GetMethod("Prefix"));
-            _harmony.Patch(targetMethod, prefix);
+            MethodInfo target = AccessTools.Method(typeof(NetworkAPI), "InvokeEvent", new[] {typeof(string), typeof(object)});
+            HarmonyMethod prefix = new HarmonyMethod(typeof(Patch), nameof(Patch.Prefix));
+            _harmony.Patch(target, prefix);
         }
     }
 
@@ -32,7 +32,7 @@ namespace BlockPlayerStatusReport
     {
         public static bool Prefix(string eventName, object data)
         {
-            if (eventName == "PlayerStatusUpdate")
+            if(eventName == "PlayerStatusUpdate")
             {
                 return false;
             }
