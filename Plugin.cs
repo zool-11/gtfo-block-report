@@ -1,150 +1,167 @@
 using System;
 using System.Reflection;
+using System.Collections.Generic;
 using HarmonyLib;
 using BepInEx;
-using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
 
 namespace BlockModListSync
 {
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
+    [BepInDependency("localia.core", BepInDependency.DependencyFlags.HardDependency)]
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource Logger;
         private static Harmony _harmony;
-        private static bool _patchesApplied = false;
+        private static bool _patched = false;
 
-        // 缓存反射元数据
-        internal static FieldInfo _myChalNumField;
-        internal static FieldInfo _slotSNetField;
-        internal static MethodInfo _makeHeaderMethod;
-        internal static MethodInfo _sendMethod;
-        internal static MethodInfo _coreVersionMethod;
-        internal static MethodInfo _arrayGetValueMethod;
+        // 反射缓存
+        private static FieldInfo _myChalNum;
+        private static FieldInfo _slotSNet;
+        private static MethodInfo _makeHeader;
+        private static MethodInfo _send;
+        private static MethodInfo _coreVer;
+        private static MethodInfo _arrGet;
 
         public override void Load()
         {
             Logger = base.Log;
             Logger.LogInfo("========================================");
-            Logger.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} 正在加载...");
+            Logger.LogInfo("  BlockModListSync 最终编译版 加载中");
+            Logger.LogInfo("========================================");
 
-            // 先检查是否已经加载了 LocaliaCore
-            Assembly existingLocalia = null;
+            _harmony = new Harmony(PluginInfo.GUID);
+            AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
+
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                if (asm.GetName().Name == "LocaliaCore")
-                {
-                    existingLocalia = asm;
-                    break;
-                }
-            }
+                TryPatch(asm);
+        }
 
-            if (existingLocalia != null)
-            {
-                ApplyPatches(existingLocalia);
-            }
-            else
-            {
-                AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
-                Logger.LogInfo("⏳ 等待 LocaliaCore 程序集加载...");
-            }
+        private static void OnAssemblyLoad(object s, AssemblyLoadEventArgs e)
+            => TryPatch(e.LoadedAssembly);
 
+        private static void TryPatch(Assembly asm)
+        {
+            if (_patched) return;
+            if (asm.GetName().Name != "LocaliaCore") return;
+
+            DoFullPatch(asm);
+            _patched = true;
+            Logger.LogInfo("========================================");
+            Logger.LogInfo("  ✅ 全链路伪装补丁应用完成");
+            Logger.LogInfo("  对方视角：MOD: UNKNOWN（与纯原版一致）");
             Logger.LogInfo("========================================");
         }
 
-        private static void OnAssemblyLoad(object sender, AssemblyLoadEventArgs args)
+        private static void DoFullPatch(Assembly asm)
         {
-            if (_patchesApplied) return;
+            const BindingFlags ALL = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+            Type netType = asm.GetType("LocaliaCore.Network_Manager");
+            Type monType = asm.GetType("LocaliaCore.LocaliaCore_Moniter");
 
-            if (args.LoadedAssembly.GetName().Name == "LocaliaCore")
+            #region ========== 反射自检 ==========
+            Logger.LogInfo("🔍 反射成员自检...");
+
+            _myChalNum = netType.GetField("myChalNum", ALL);
+            _slotSNet = netType.GetField("slot_SNet", ALL);
+            _makeHeader = netType.GetMethod("MakeHeader", ALL);
+            _send = netType.GetMethod("Send", ALL);
+            _arrGet = typeof(Array).GetMethod("GetValue", new[] { typeof(int) });
+            Type apiType = asm.GetType("LocaliaCore.API");
+            _coreVer = apiType.GetMethod("Core_VersionString", ALL);
+
+            Logger.LogInfo(_myChalNum != null ? "  ✅ myChalNum" : "  ❌ myChalNum 丢失");
+            Logger.LogInfo(_slotSNet != null ? "  ✅ slot_SNet" : "  ❌ slot_SNet 丢失");
+            Logger.LogInfo(_makeHeader != null ? "  ✅ MakeHeader" : "  ❌ MakeHeader 丢失");
+            Logger.LogInfo(_send != null ? "  ✅ Send" : "  ❌ Send 丢失");
+            Logger.LogInfo(_coreVer != null ? "  ✅ Core_VersionString" : "  ❌ Core_VersionString 丢失");
+            #endregion
+
+            #region ========== 第1层：核心探测彻底屏蔽 ==========
+            Logger.LogInfo("--- 第1层：核心探测屏蔽 ---");
+
+            // 1.1 拦截所有A2s信号发送（单发+广播+重试全场景）
+            MethodInfo sendA2s = netType.GetMethod("sendA2s_Info", ALL);
+            if (sendA2s != null)
             {
-                ApplyPatches(args.LoadedAssembly);
-                AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
+                _harmony.Patch(sendA2s, prefix: new HarmonyMethod(typeof(Patches).GetMethod("Block_SendA2s", ALL)));
+                Logger.LogInfo("  ✅ sendA2s_Info 全场景拦截");
             }
-        }
+            else Logger.LogWarning("  ⚠️ sendA2s_Info 未找到");
 
-        private static void ApplyPatches(Assembly localiaAssembly)
-        {
-            try
+            // 1.2 进房后置清零广播计数，彻底终止广播循环
+            MethodInfo addSlot = netType.GetMethod("addSlotLookup", ALL);
+            if (addSlot != null)
             {
-                Logger.LogInfo("📦 检测到 LocaliaCore 程序集，开始应用补丁...");
-
-                Type networkType = localiaAssembly.GetType("LocaliaCore.Network_Manager");
-                if (networkType == null)
-                {
-                    Logger.LogError("❌ 未找到 Network_Manager 类型");
-                    return;
-                }
-
-                // 反射同时支持实例+静态，避免成员类型不匹配
-                const BindingFlags AllFlags = BindingFlags.Instance | BindingFlags.Static 
-                                            | BindingFlags.Public | BindingFlags.NonPublic;
-
-                _myChalNumField = networkType.GetField("myChalNum", AllFlags);
-                _slotSNetField = networkType.GetField("slot_SNet", AllFlags);
-                _makeHeaderMethod = networkType.GetMethod("MakeHeader", AllFlags);
-                _sendMethod = networkType.GetMethod("Send", AllFlags);
-
-                Type apiType = localiaAssembly.GetType("LocaliaCore.API");
-                _coreVersionMethod = apiType?.GetMethod("Core_VersionString", AllFlags);
-
-                // 反射结果校验日志
-                Logger.LogInfo($"[调试反射] myChalNum字段: {(_myChalNumField != null ? "✅找到" : "❌缺失")} 类型: {(_myChalNumField?.IsStatic == true ? "静态" : "实例")}");
-                Logger.LogInfo($"[调试反射] slot_SNet字段: {(_slotSNetField != null ? "✅找到" : "❌缺失")} 类型: {(_slotSNetField?.IsStatic == true ? "静态" : "实例")}");
-                Logger.LogInfo($"[调试反射] MakeHeader方法: {(_makeHeaderMethod != null ? "✅找到" : "❌缺失")} 参数数: {_makeHeaderMethod?.GetParameters().Length}");
-                Logger.LogInfo($"[调试反射] Send方法: {(_sendMethod != null ? "✅找到" : "❌缺失")} 参数数: {_sendMethod?.GetParameters().Length}");
-                Logger.LogInfo($"[调试反射] Core_VersionString方法: {(_coreVersionMethod != null ? "✅找到" : "❌缺失")}");
-
-                // 校验核心元数据完整性
-                if (_myChalNumField == null || _slotSNetField == null
-                    || _makeHeaderMethod == null || _sendMethod == null
-                    || _coreVersionMethod == null)
-                {
-                    Logger.LogError("❌ 核心反射元数据不完整，补丁加载终止");
-                    return;
-                }
-
-                // 数组取值方法用标准Array类
-                _arrayGetValueMethod = typeof(Array).GetMethod("GetValue", new[] { typeof(int) });
-
-                _harmony = new Harmony(PluginInfo.GUID);
-
-                // 补丁1：拦截模组明细发送
-                MethodInfo sendModList = networkType.GetMethod("sendModListData", AllFlags);
-                if (sendModList != null)
-                {
-                    MethodInfo prefixMod = typeof(Patches).GetMethod(nameof(Patches.Prefix_SendModListData), AllFlags);
-                    _harmony.Patch(sendModList, prefix: new HarmonyMethod(prefixMod));
-                    Logger.LogInfo("✅ sendModListData 拦截成功");
-                }
-                else
-                {
-                    Logger.LogWarning("⚠️ 未找到 sendModListData 方法");
-                }
-
-                // 补丁2：核心信息模组数量置0
-                MethodInfo sendCoreInfo = networkType.GetMethod("sendCoreInfo", AllFlags);
-                if (sendCoreInfo != null)
-                {
-                    MethodInfo prefixCore = typeof(Patches).GetMethod(nameof(Patches.Prefix_SendCoreInfo), AllFlags);
-                    _harmony.Patch(sendCoreInfo, prefix: new HarmonyMethod(prefixCore));
-                    Logger.LogInfo("✅ sendCoreInfo 模组数量已置0");
-                }
-                else
-                {
-                    Logger.LogWarning("⚠️ 未找到 sendCoreInfo 方法");
-                }
-
-                _patchesApplied = true;
-                Logger.LogInfo("✅ 模组列表完全隐藏已生效");
-                Logger.LogInfo("✅ 对方将直接显示 MOD: UNKNOWN");
+                _harmony.Patch(addSlot, postfix: new HarmonyMethod(typeof(Patches).GetMethod("Postfix_AddSlot", ALL)));
+                Logger.LogInfo("  ✅ addSlotLookup 后置清零广播");
             }
-            catch (Exception ex)
+            else Logger.LogWarning("  ⚠️ addSlotLookup 未找到");
+
+            // 1.3 初始清零兜底
+            FieldInfo broadcast = monType.GetField("boardcastAvaliable", ALL);
+            if (broadcast != null)
             {
-                Logger.LogError($"❌ 补丁加载失败: {ex.Message}");
-                Logger.LogDebug($"❌ 详细堆栈: {ex.StackTrace}");
+                broadcast.SetValue(null, 0);
+                Logger.LogInfo("  ✅ 初始广播计数清零");
             }
+            else Logger.LogWarning("  ⚠️ boardcastAvaliable 未找到");
+            #endregion
+
+            #region ========== 第2层：核心信息数量伪装 ==========
+            Logger.LogInfo("--- 第2层：核心数量伪装 ---");
+
+            MethodInfo sendCore = netType.GetMethod("sendCoreInfo", ALL);
+            if (sendCore != null)
+            {
+                _harmony.Patch(sendCore, prefix: new HarmonyMethod(typeof(Patches).GetMethod("Prefix_SendCoreInfo", ALL)));
+                Logger.LogInfo("  ✅ sendCoreInfo 强制数量为0");
+            }
+            else Logger.LogWarning("  ⚠️ sendCoreInfo 未找到");
+            #endregion
+
+            #region ========== 第3层：列表请求接收层拦截 ==========
+            Logger.LogInfo("--- 第3层：请求接收屏蔽 ---");
+
+            MethodInfo onRecvGet = netType.GetMethod("onRecv_GetModList", ALL);
+            if (onRecvGet != null)
+            {
+                _harmony.Patch(onRecvGet, prefix: new HarmonyMethod(typeof(Patches).GetMethod("Block_RecvRequest", ALL)));
+                Logger.LogInfo("  ✅ onRecv_GetModList 丢弃请求");
+            }
+            else Logger.LogWarning("  ⚠️ onRecv_GetModList 未找到");
+            #endregion
+
+            #region ========== 第4层：模组明细发送拦截 ==========
+            Logger.LogInfo("--- 第4层：明细发送拦截 ---");
+
+            MethodInfo sendModList = netType.GetMethod("sendModListData", ALL);
+            if (sendModList != null)
+            {
+                _harmony.Patch(sendModList, prefix: new HarmonyMethod(typeof(Patches).GetMethod("Block_SendModList", ALL)));
+                Logger.LogInfo("  ✅ sendModListData 拦截发包");
+            }
+            else Logger.LogWarning("  ⚠️ sendModListData 未找到");
+            #endregion
+
+            #region ========== 第5层：发送缓冲根源清空 ==========
+            Logger.LogInfo("--- 第5层：发送缓冲清空 ---");
+
+            FieldInfo buf = netType.GetField("myModListBuffer", ALL);
+            if (buf != null)
+            {
+                buf.SetValue(null, new Dictionary<uint, string>());
+                Logger.LogInfo("  ✅ 压缩发送缓冲已清空");
+            }
+
+            FieldInfo bufRaw = netType.GetField("myModListBuffer_raw", ALL);
+            if (bufRaw != null)
+            {
+                bufRaw.SetValue(null, new Dictionary<uint, string>());
+                Logger.LogInfo("  ✅ 原始发送缓冲已清空");
+            }
+            #endregion
         }
     }
 
@@ -152,94 +169,71 @@ namespace BlockModListSync
     {
         public const string GUID = "dev.blockmodlistsync";
         public const string Name = "BlockModListSync";
-        public const string Version = "1.0.0";
+        public const string Version = "4.2.2";
     }
 
     public static class Patches
     {
-        /// <summary>
-        /// 拦截模组列表明细发送
-        /// </summary>
-        public static bool Prefix_SendModListData()
+        // 第1层：拦截所有A2s核心探测信号
+        public static bool Block_SendA2s(object[] __args)
         {
-            Plugin.Logger.LogInfo("[调试运行] sendModListData 已拦截，阻止发送模组明细");
-            // 直接返回false，跳过原生方法
+            Plugin.Logger.LogDebug("[拦截] 阻止发送 A2s 核心探测信号");
             return false;
         }
 
-        /// <summary>
-        /// 修改核心信息广播：模组数量强制置0
-        /// __instance 为 Harmony 自动传入的方法所属实例
-        /// </summary>
-        public static bool Prefix_SendCoreInfo(object __instance, int slot)
+        // 第1层：进房后置清零广播计数（运行时反射，无需编译时引用）
+        public static void Postfix_AddSlot()
+        {
+            Type monType = Type.GetType("LocaliaCore.LocaliaCore_Moniter, LocaliaCore");
+            if (monType == null) return;
+
+            FieldInfo broadcast = monType.GetField("boardcastAvaliable",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (broadcast != null)
+            {
+                broadcast.SetValue(null, 0);
+                Plugin.Logger.LogDebug("[后置] 槽位更新，广播计数已清零");
+            }
+        }
+
+        // 第2层：核心信息伪装，强制返回0个模组
+        public static bool Prefix_SendCoreInfo(int slot)
         {
             try
             {
-                Plugin.Logger.LogInfo($"[调试运行] 触发 sendCoreInfo 拦截，目标槽位 slot={slot}");
-
-                // 全量空值校验
-                if (Plugin._myChalNumField == null || Plugin._slotSNetField == null
-                    || Plugin._makeHeaderMethod == null || Plugin._sendMethod == null
-                    || Plugin._coreVersionMethod == null || Plugin._arrayGetValueMethod == null)
-                {
-                    Plugin.Logger.LogWarning("[调试运行] 反射元数据缺失，回退原生逻辑");
-                    return true;
-                }
-
-                // 自动适配实例/静态调用
-                object instance = Plugin._myChalNumField.IsStatic ? null : __instance;
-                Plugin.Logger.LogInfo($"[调试运行] 调用模式: {(instance == null ? "静态" : "实例")}");
-
-                // 1. 获取本地校验码
-                int chalNum = (int)Plugin._myChalNumField.GetValue(instance);
-                Plugin.Logger.LogInfo($"[调试运行] 读取校验码 myChalNum = {chalNum}");
-
-                // 2. 获取目标连接对象
-                object slotArray = Plugin._slotSNetField.GetValue(instance);
-                if (slotArray == null)
-                {
-                    Plugin.Logger.LogWarning("[调试运行] 连接数组为空，回退原生逻辑");
-                    return true;
-                }
-                object target = Plugin._arrayGetValueMethod.Invoke(slotArray, new object[] { slot });
-                if (target == null)
-                {
-                    Plugin.Logger.LogWarning($"[调试运行] 槽位 {slot} 无连接对象，回退原生逻辑");
-                    return true;
-                }
-                Plugin.Logger.LogInfo($"[调试运行] 获取目标连接对象成功");
-
-                // 3. 构造消息头
-                string header = (string)Plugin._makeHeaderMethod.Invoke(instance, new object[] { 1, false, false });
-                if (string.IsNullOrEmpty(header))
-                {
-                    Plugin.Logger.LogWarning("[调试运行] 消息头构造失败，回退原生逻辑");
-                    return true;
-                }
-                Plugin.Logger.LogInfo($"[调试运行] 构造消息头成功，长度: {header.Length}");
-
-                // 4. 获取核心版本
-                string version = (string)Plugin._coreVersionMethod.Invoke(null, null);
-                Plugin.Logger.LogInfo($"[调试运行] 核心版本: {version}");
-
-                // 5. 拼接最终数据包（模组数量强制为0）
+                object instance = null;
+                int chalNum = (int)Plugin._myChalNum.GetValue(instance);
+                object slotArray = Plugin._slotSNet.GetValue(instance);
+                object target = Plugin._arrGet.Invoke(slotArray, new object[] { slot });
+                
+                string header = (string)Plugin._makeHeader.Invoke(instance, new object[] { 1, false, false });
+                string version = (string)Plugin._coreVer.Invoke(null, null);
+                
                 string content = $"{header}{chalNum};0;{version}";
-                Plugin.Logger.LogInfo($"[调试运行] 构造数据包完成，内容长度: {content.Length}");
-
-                // 6. 发送修改后的数据包
-                Plugin._sendMethod.Invoke(instance, new[] { target, 1, content, 0u, true });
-                Plugin.Logger.LogInfo("[调试运行] ✅ 自定义数据包发送成功，已跳过原生方法");
-
-                // 跳过原生方法
+                Plugin._send.Invoke(instance, new[] { target, 1, content, 0u, true });
+                
+                Plugin.Logger.LogDebug($"[伪装] 槽位{slot} 核心信息已发送（数量强制为0）");
                 return false;
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogError($"[调试运行] 拦截执行出错: {ex.Message}");
-                Plugin.Logger.LogDebug($"[调试运行] 异常堆栈: {ex.StackTrace}");
-                // 出错自动回退原生逻辑，保证联机不崩
+                Plugin.Logger.LogWarning($"[异常] sendCoreInfo 拦截失败，执行原生: {ex.Message}");
                 return true;
             }
+        }
+
+        // 第3层：收到对方模组列表请求，直接丢弃
+        public static bool Block_RecvRequest(object[] __args)
+        {
+            Plugin.Logger.LogDebug("[拦截] 丢弃对方的模组列表请求");
+            return false;
+        }
+
+        // 第4层：拦截模组明细分片发送
+        public static bool Block_SendModList(object[] __args)
+        {
+            Plugin.Logger.LogDebug("[拦截] 阻止发送模组明细分片");
+            return false;
         }
     }
 }
