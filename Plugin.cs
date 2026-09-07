@@ -11,7 +11,6 @@ namespace BlockPlayerStatusReport
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
-        // 静态日志实例，给Patch用
         internal static ManualLogSource LogInstance;
 
         public static class PluginInfo
@@ -30,11 +29,13 @@ namespace BlockPlayerStatusReport
             _harmony = new Harmony(PluginInfo.GUID);
 
             MethodInfo targetMethod = null;
+            // 同时找实例方法 + 静态方法，去掉static过滤
             var methods = typeof(NetworkAPI).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
             foreach(var m in methods)
             {
                 if(m.Name != "InvokeEvent") continue;
                 var pars = m.GetParameters();
+                // 参数：第一个string，第二个object，一共2个参数
                 if(pars.Length == 2 && pars[0].ParameterType == typeof(string))
                 {
                     targetMethod = m;
@@ -45,8 +46,18 @@ namespace BlockPlayerStatusReport
             if (targetMethod == null)
             {
                 Log.LogError($"[{PluginInfo.Name}] 找不到NetworkAPI.InvokeEvent，拦截失效！");
+
+                // 打印全部InvokeEvent信息，方便调试
+                foreach(var m in typeof(NetworkAPI).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+                {
+                    if(m.Name == "InvokeEvent")
+                    {
+                        Log.LogError($"[Debug]找到InvokeEvent：IsStatic:{m.IsStatic}, 参数数量:{m.GetParameters().Length}");
+                    }
+                }
                 return;
             }
+            Log.LogInfo($"[{PluginInfo.Name}] 成功找到InvokeEvent，IsStatic:{targetMethod.IsStatic}");
 
             HarmonyMethod prefixPatch = new HarmonyMethod(typeof(Patch), nameof(Patch.Prefix));
             _harmony.Patch(targetMethod, prefixPatch);
@@ -55,7 +66,8 @@ namespace BlockPlayerStatusReport
 
     public static class Patch
     {
-        public static bool Prefix(string eventName, object data)
+        // 实例方法的prefix第一个参数必须是 __instance
+        public static bool Prefix(object __instance, string eventName, object data)
         {
             if (eventName == "Localia.ModList.Sync")
             {
