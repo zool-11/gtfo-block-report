@@ -89,6 +89,13 @@ namespace BlockModListSync
                 Type apiType = localiaAssembly.GetType("LocaliaCore.API");
                 _coreVersionMethod = apiType?.GetMethod("Core_VersionString", AllFlags);
 
+                // 反射结果校验日志
+                Logger.LogInfo($"[调试反射] myChalNum字段: {(_myChalNumField != null ? "✅找到" : "❌缺失")} 类型: {(_myChalNumField?.IsStatic == true ? "静态" : "实例")}");
+                Logger.LogInfo($"[调试反射] slot_SNet字段: {(_slotSNetField != null ? "✅找到" : "❌缺失")} 类型: {(_slotSNetField?.IsStatic == true ? "静态" : "实例")}");
+                Logger.LogInfo($"[调试反射] MakeHeader方法: {(_makeHeaderMethod != null ? "✅找到" : "❌缺失")} 参数数: {_makeHeaderMethod?.GetParameters().Length}");
+                Logger.LogInfo($"[调试反射] Send方法: {(_sendMethod != null ? "✅找到" : "❌缺失")} 参数数: {_sendMethod?.GetParameters().Length}");
+                Logger.LogInfo($"[调试反射] Core_VersionString方法: {(_coreVersionMethod != null ? "✅找到" : "❌缺失")}");
+
                 // 校验核心元数据完整性
                 if (_myChalNumField == null || _slotSNetField == null
                     || _makeHeaderMethod == null || _sendMethod == null
@@ -98,15 +105,8 @@ namespace BlockModListSync
                     return;
                 }
 
-                // 预缓存数组取值方法
-                // 这里先不取值，运行时从实例中取，避免静态/实例不匹配
+                // 数组取值方法用标准Array类
                 _arrayGetValueMethod = typeof(Array).GetMethod("GetValue", new[] { typeof(int) });
-
-                if (_arrayGetValueMethod == null)
-                {
-                    Logger.LogError("❌ 数组取值方法获取失败");
-                    return;
-                }
 
                 _harmony = new Harmony(PluginInfo.GUID);
 
@@ -158,64 +158,86 @@ namespace BlockModListSync
     public static class Patches
     {
         /// <summary>
-        /// 拦截模组列表明细发送，兜底防护
+        /// 拦截模组列表明细发送
         /// </summary>
         public static bool Prefix_SendModListData()
         {
-            // 直接拦截，不发送明细
+            Plugin.Logger.LogInfo("[调试运行] sendModListData 已拦截，阻止发送模组明细");
+            // 直接返回false，跳过原生方法
             return false;
         }
 
         /// <summary>
         /// 修改核心信息广播：模组数量强制置0
-        /// __instance 为 Harmony 自动传入的方法所属实例（实例方法时有效）
-        /// 全链路空值校验，异常自动回退原生逻辑
+        /// __instance 为 Harmony 自动传入的方法所属实例
         /// </summary>
         public static bool Prefix_SendCoreInfo(object __instance, int slot)
         {
             try
             {
-                // 全量空值校验，任何一环失效立即回退
+                Plugin.Logger.LogInfo($"[调试运行] 触发 sendCoreInfo 拦截，目标槽位 slot={slot}");
+
+                // 全量空值校验
                 if (Plugin._myChalNumField == null || Plugin._slotSNetField == null
                     || Plugin._makeHeaderMethod == null || Plugin._sendMethod == null
                     || Plugin._coreVersionMethod == null || Plugin._arrayGetValueMethod == null)
                 {
+                    Plugin.Logger.LogWarning("[调试运行] 反射元数据缺失，回退原生逻辑");
                     return true;
                 }
 
-                // 自动适配实例/静态：实例方法用 __instance，静态方法传 null
+                // 自动适配实例/静态调用
                 object instance = Plugin._myChalNumField.IsStatic ? null : __instance;
+                Plugin.Logger.LogInfo($"[调试运行] 调用模式: {(instance == null ? "静态" : "实例")}");
 
-                // 获取本地校验码
+                // 1. 获取本地校验码
                 int chalNum = (int)Plugin._myChalNumField.GetValue(instance);
+                Plugin.Logger.LogInfo($"[调试运行] 读取校验码 myChalNum = {chalNum}");
 
-                // 获取目标连接实例数组
+                // 2. 获取目标连接对象
                 object slotArray = Plugin._slotSNetField.GetValue(instance);
-                if (slotArray == null) return true;
-                
+                if (slotArray == null)
+                {
+                    Plugin.Logger.LogWarning("[调试运行] 连接数组为空，回退原生逻辑");
+                    return true;
+                }
                 object target = Plugin._arrayGetValueMethod.Invoke(slotArray, new object[] { slot });
-                if (target == null) return true;
+                if (target == null)
+                {
+                    Plugin.Logger.LogWarning($"[调试运行] 槽位 {slot} 无连接对象，回退原生逻辑");
+                    return true;
+                }
+                Plugin.Logger.LogInfo($"[调试运行] 获取目标连接对象成功");
 
-                // 构造消息头
+                // 3. 构造消息头
                 string header = (string)Plugin._makeHeaderMethod.Invoke(instance, new object[] { 1, false, false });
-                if (string.IsNullOrEmpty(header)) return true;
+                if (string.IsNullOrEmpty(header))
+                {
+                    Plugin.Logger.LogWarning("[调试运行] 消息头构造失败，回退原生逻辑");
+                    return true;
+                }
+                Plugin.Logger.LogInfo($"[调试运行] 构造消息头成功，长度: {header.Length}");
 
-                // 获取核心版本（API 一般是静态方法，传 null）
+                // 4. 获取核心版本
                 string version = (string)Plugin._coreVersionMethod.Invoke(null, null);
-                if (string.IsNullOrEmpty(version)) return true;
+                Plugin.Logger.LogInfo($"[调试运行] 核心版本: {version}");
 
-                // 拼接数据包：模组数量强制写0
+                // 5. 拼接最终数据包（模组数量强制为0）
                 string content = $"{header}{chalNum};0;{version}";
+                Plugin.Logger.LogInfo($"[调试运行] 构造数据包完成，内容长度: {content.Length}");
 
-                // 发送修改后的数据包
+                // 6. 发送修改后的数据包
                 Plugin._sendMethod.Invoke(instance, new[] { target, 1, content, 0u, true });
+                Plugin.Logger.LogInfo("[调试运行] ✅ 自定义数据包发送成功，已跳过原生方法");
 
                 // 跳过原生方法
                 return false;
             }
-            catch
+            catch (Exception ex)
             {
-                // 任何异常都回退原生逻辑，优先保证连接稳定
+                Plugin.Logger.LogError($"[调试运行] 拦截执行出错: {ex.Message}");
+                Plugin.Logger.LogDebug($"[调试运行] 异常堆栈: {ex.StackTrace}");
+                // 出错自动回退原生逻辑，保证联机不崩
                 return true;
             }
         }
