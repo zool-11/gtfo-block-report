@@ -1,7 +1,10 @@
 name: Build Mod
+
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: windows-latest
@@ -20,4 +23,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ModDll
-          path: bin/Release/netstandard2.1/BlockPlayerStatusReport.dll
+          path: "**/bin/Release/**/BlockReport.dll"
