@@ -21,8 +21,11 @@ jobs:
 
       - name: Build
         run: |
-          dotnet build BlockReport.csproj --configuration Release \
-            -p:ReferencePath="./lib"
+          dotnet add BlockReport.csproj reference lib/0Harmony.dll
+          dotnet add BlockReport.csproj reference lib/BepInEx.Core.dll
+          dotnet add BlockReport.csproj reference lib/BepInEx.Unity.IL2CPP.dll
+          dotnet add BlockReport.csproj reference lib/GTFO-API.dll
+          dotnet build BlockReport.csproj --configuration Release
 
       - name: Upload dll artifact
         uses: actions/upload-artifact@v4
