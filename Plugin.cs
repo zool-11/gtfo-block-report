@@ -34,7 +34,6 @@ namespace BlockPlayerStatusReport
             {
                 if(m.Name != "InvokeEvent") continue;
                 var pars = m.GetParameters();
-                // GTFO‑API0.4.1静态重载，第一个参数固定string eventName
                 if(pars.Length >= 1 && pars[0].ParameterType == typeof(string))
                 {
                     targetMethod = m;
@@ -50,16 +49,21 @@ namespace BlockPlayerStatusReport
             }
             Log.LogInfo($"[{PluginInfo.Name}] 成功找到InvokeEvent，准备打补丁");
 
-            HarmonyMethod prefixPatch = new HarmonyMethod(typeof(Patch), nameof(Patch.Prefix));
-            _harmony.Patch(targetMethod, prefixPatch);
+            var patch = new HarmonyMethod(typeof(Patch), nameof(Patch.ManualPrefix));
+            _harmony.Patch(targetMethod, prefix: patch);
         }
     }
 
     public static class Patch
     {
-        // ✔静态方法，没有__instance；params吃掉后面所有数量参数，适配3/4参数重载
-        public static bool Prefix(string eventName, params object[] _unused)
+        public static bool ManualPrefix(object[] __args)
         {
+            if(__args == null || __args.Length == 0)
+            {
+                return true;
+            }
+
+            string eventName = __args[0] as string;
             if (eventName == "Localia.ModList.Sync")
             {
                 Plugin.LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
