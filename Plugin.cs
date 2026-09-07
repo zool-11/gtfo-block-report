@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using HarmonyLib;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
@@ -5,7 +7,9 @@ using BepInEx.Logging;
 
 namespace BlockModListSync
 {
+    // 强制依赖 LocaliaCore，确保它先加载完成
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
+    [BepInDependency("LocaliaCore", BepInDependency.DependencyFlags.HardDependency)]
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
@@ -20,16 +24,55 @@ namespace BlockModListSync
 
             try
             {
+                // 手动获取 LocaliaCore 程序集里的目标类型
+                Assembly localiaAssembly = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (asm.GetName().Name == "LocaliaCore")
+                    {
+                        localiaAssembly = asm;
+                        break;
+                    }
+                }
+
+                if (localiaAssembly == null)
+                {
+                    _log.LogError("❌ 未找到 LocaliaCore 程序集，补丁加载终止");
+                    return;
+                }
+
+                Type networkManagerType = localiaAssembly.GetType("LocaliaCore.Network_Manager");
+                if (networkManagerType == null)
+                {
+                    _log.LogError("❌ 未找到 Network_Manager 类型，类名可能已变更");
+                    return;
+                }
+
                 _harmony = new Harmony(PluginInfo.GUID);
-                _harmony.PatchAll(typeof(Patches));
-                
-                _log.LogInfo("✅ 补丁加载成功，模组列表已隐藏");
+
+                // 手动补丁 sendModListData 方法
+                MethodInfo sendModListMethod = networkManagerType.GetMethod("sendModListData",
+                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (sendModListMethod != null)
+                {
+                    _harmony.Patch(sendModListMethod,
+                        prefix: new HarmonyMethod(typeof(Patches).GetMethod(nameof(Patches.Prefix_SendModListData),
+                        BindingFlags.Static | BindingFlags.NonPublic)));
+                    _log.LogInfo("✅ sendModListData 拦截成功");
+                }
+                else
+                {
+                    _log.LogWarning("⚠️ 未找到 sendModListData 方法");
+                }
+
+                _log.LogInfo("✅ 模组列表屏蔽已生效");
                 _log.LogInfo("✅ 其他玩家无法查看你的模组列表");
                 _log.LogInfo("========================================");
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 _log.LogError($"❌ 补丁加载失败: {ex.Message}");
+                _log.LogError($"❌ 详细堆栈: {ex.StackTrace}");
             }
         }
 
@@ -45,13 +88,10 @@ namespace BlockModListSync
     {
         /// <summary>
         /// 拦截模组列表数据发送
-        /// 对方请求后收不到数据，超时后自动显示 MOD: UNKNOWN
         /// </summary>
-        [HarmonyPrefix]
-        [HarmonyPatch("LocaliaCore.Network_Manager", "sendModListData")]
         private static bool Prefix_SendModListData()
         {
-            // 跳过原方法，不发送任何模组数据
+            // 返回 false = 跳过原方法，不发送任何模组数据
             return false;
         }
     }
