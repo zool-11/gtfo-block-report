@@ -2,7 +2,9 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>BlockPlayerStatusReport</AssemblyName>
+    <Nullable>disable</Nullable>
   </PropertyGroup>
+
   <ItemGroup>
     <Reference Include="BepInEx.Core">
       <HintPath>./lib/BepInEx.Core.dll</HintPath>
@@ -17,7 +19,8 @@
       <HintPath>./lib/GTFO‑API.dll</HintPath>
     </Reference>
   </ItemGroup>
+
   <ItemGroup>
-    <Compile Include="Plugin.cs"/>
+    <Compile Include="Plugin.cs" />
   </ItemGroup>
 </Project>
