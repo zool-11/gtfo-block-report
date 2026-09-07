@@ -16,17 +16,19 @@ namespace BlockModListSync
 
         public override void Load()
         {
-            _log = Logger;
+            // 用 base.Logger 明确调用实例属性，避免和 Logger 类名冲突
+            _log = base.Logger;
             _log.LogInfo("========================================");
             _log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} 正在加载...");
 
             try
             {
                 _harmony = new Harmony(PluginInfo.GUID);
-                var patchedMethods = _harmony.PatchAll(typeof(Patches));
+                // PatchAll 无返回值，直接调用
+                _harmony.PatchAll(typeof(Patches));
                 
-                _log.LogInfo($"✅ 补丁加载成功，共拦截 {patchedMethods.Count} 个方法");
-                _log.LogInfo("✅ 模组列表广播已屏蔽，其他玩家将无法查看你的模组列表");
+                _log.LogInfo("✅ 补丁加载成功，模组列表广播已屏蔽");
+                _log.LogInfo("✅ 其他玩家将无法查看你的模组列表");
                 _log.LogInfo("========================================");
             }
             catch (Exception ex)
