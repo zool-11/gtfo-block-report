@@ -1,6 +1,6 @@
 using System;
-using System.Linq;
-using System.Reflection;
+using System.Collections.Generic;
+using HarmonyLib;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
@@ -12,6 +12,7 @@ namespace BlockPlayerStatusReport
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource LogInstance;
+        private static Harmony _harmonyInstance;
 
         public static class PluginInfo
         {
@@ -23,57 +24,127 @@ namespace BlockPlayerStatusReport
         public override void Load()
         {
             LogInstance = Log;
-            Log.LogInfo($"[{PluginInfo.Name}] Load() start");
+            Log.LogInfo($"[{PluginInfo.Name}] Mod loading start");
+
             try
             {
-                // 按程序集名称定位 GTFO-API
-                Assembly gtfoApiAsm = AppDomain.CurrentDomain.GetAssemblies()
-                    .FirstOrDefault(a => a.GetName().Name == "GTFO-API");
+                _harmonyInstance = new Harmony(PluginInfo.GUID);
+                int successCount = 0;
 
-                if (gtfoApiAsm == null)
-                {
-                    Log.LogError($"[{PluginInfo.Name}] GTFO-API assembly not found");
-                    return;
-                }
-                Log.LogInfo($"[{PluginInfo.Name}] Found GTFO-API assembly");
-
-                Type networkApiType;
+                // 重载1：全局广播
                 try
                 {
-                    networkApiType = gtfoApiAsm.GetType("GTFO.API.NetworkAPI");
+                    _harmonyInstance.Patch(
+                        original: AccessTools.Method(typeof(GTFO.API.NetworkAPI), nameof(GTFO.API.NetworkAPI.InvokeFreeSizedEvent),
+                            new[] { typeof(string), typeof(byte[]), typeof(SNet_ChannelType) }),
+                        prefix: new HarmonyMethod(typeof(Plugin), nameof(OnBroadcastPrefix))
+                    );
+                    successCount++;
                 }
                 catch (Exception ex)
                 {
-                    Log.LogError($"[{PluginInfo.Name}] GetType NetworkAPI failed: {ex.Message}");
-                    return;
+                    Log.LogError($"[{PluginInfo.Name}] Failed to patch broadcast overload: {ex.Message}");
                 }
 
-                if (networkApiType == null)
+                // 重载2：指定单个玩家
+                try
                 {
-                    Log.LogError($"[{PluginInfo.Name}] NetworkAPI type not found");
-                    return;
+                    _harmonyInstance.Patch(
+                        original: AccessTools.Method(typeof(GTFO.API.NetworkAPI), nameof(GTFO.API.NetworkAPI.InvokeFreeSizedEvent),
+                            new[] { typeof(string), typeof(byte[]), typeof(SNet_Player), typeof(SNet_ChannelType) }),
+                        prefix: new HarmonyMethod(typeof(Plugin), nameof(OnTargetPrefix))
+                    );
+                    successCount++;
                 }
-
-                Log.LogInfo($"[{PluginInfo.Name}] === NetworkAPI ALL Static Methods ===");
-
-                // 枚举所有静态方法：公开+非公开
-                MethodInfo[] methods = networkApiType.GetMethods(
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-
-                foreach (var mi in methods)
+                catch (Exception ex)
                 {
-                    string isGeneric = mi.IsGenericMethod ? " [GENERIC]" : "";
-                    var paramList = string.Join(", ", mi.GetParameters()
-                        .Select(p => $"{p.ParameterType.Name} {p.Name}"));
-                    Log.LogInfo($"[{PluginInfo.Name}] {mi.Name}{isGeneric} | ({paramList})");
+                    Log.LogError($"[{PluginInfo.Name}] Failed to patch target overload: {ex.Message}");
                 }
 
-                Log.LogInfo($"[{PluginInfo.Name}] === End of List ===");
+                // 重载3：指定多个玩家
+                try
+                {
+                    _harmonyInstance.Patch(
+                        original: AccessTools.Method(typeof(GTFO.API.NetworkAPI), nameof(GTFO.API.NetworkAPI.InvokeFreeSizedEvent),
+                            new[] { typeof(string), typeof(byte[]), typeof(IEnumerable<SNet_Player>), typeof(SNet_ChannelType) }),
+                        prefix: new HarmonyMethod(typeof(Plugin), nameof(OnMultiTargetPrefix))
+                    );
+                    successCount++;
+                }
+                catch (Exception ex)
+                {
+                    Log.LogError($"[{PluginInfo.Name}] Failed to patch multi-target overload: {ex.Message}");
+                }
+
+                Log.LogInfo($"[{PluginInfo.Name}] Patch complete: {successCount}/3 overloads applied");
+
+                if (successCount == 0)
+                {
+                    Log.LogError($"[{PluginInfo.Name}] All patches failed, mod will not work");
+                }
             }
             catch (Exception ex)
             {
-                Log.LogError($"[{PluginInfo.Name}] Top-level exception: {ex}");
+                Log.LogError($"[{PluginInfo.Name}] Fatal load error: {ex}");
             }
         }
+
+        public override bool Unload()
+        {
+            try
+            {
+                _harmonyInstance?.UnpatchAll(PluginInfo.GUID);
+                Log.LogInfo($"[{PluginInfo.Name}] All patches unloaded");
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        #region 拦截逻辑
+        // 广播场景拦截
+        private static bool OnBroadcastPrefix(string eventName, byte[] payload, SNet_ChannelType channelType)
+        {
+            if (string.IsNullOrEmpty(eventName))
+                return true;
+
+            if (eventName == "Localia.ModList.Sync")
+            {
+                LogInstance.LogDebug("[BlockReport] Dropped ModList.Sync (broadcast)");
+                return false; // 终止原始方法，丢弃数据包
+            }
+            return true; // 放行其他所有事件
+        }
+
+        // 单发场景拦截
+        private static bool OnTargetPrefix(string eventName, byte[] payload, SNet_Player target, SNet_ChannelType channelType)
+        {
+            if (string.IsNullOrEmpty(eventName))
+                return true;
+
+            if (eventName == "Localia.ModList.Sync")
+            {
+                LogInstance.LogDebug("[BlockReport] Dropped ModList.Sync (single target)");
+                return false;
+            }
+            return true;
+        }
+
+        // 群发场景拦截
+        private static bool OnMultiTargetPrefix(string eventName, byte[] payload, IEnumerable<SNet_Player> targets, SNet_ChannelType channelType)
+        {
+            if (string.IsNullOrEmpty(eventName))
+                return true;
+
+            if (eventName == "Localia.ModList.Sync")
+            {
+                LogInstance.LogDebug("[BlockReport] Dropped ModList.Sync (multi target)");
+                return false;
+            }
+            return true;
+        }
+        #endregion
     }
 }
