@@ -1,8 +1,9 @@
+using System;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
-using HarmonyLib;
+using MonoMod.RuntimeDetour;
 using GTFO.API;
 
 namespace BlockPlayerStatusReport
@@ -12,6 +13,7 @@ namespace BlockPlayerStatusReport
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource LogInstance;
+        private static IDetour _detour;
 
         public static class PluginInfo
         {
@@ -20,13 +22,10 @@ namespace BlockPlayerStatusReport
             public const string Version = "1.0.0";
         }
 
-        private Harmony _harmony;
-
         public override void Load()
         {
             LogInstance = Log;
             Log.LogInfo($"[{PluginInfo.Name}] 已加载：拦截ModList向外上报mod列表");
-            _harmony = new Harmony(PluginInfo.GUID);
 
             MethodInfo targetMethod = null;
             var methods = typeof(NetworkAPI).GetMethods(BindingFlags.Public | BindingFlags.Static);
@@ -47,28 +46,30 @@ namespace BlockPlayerStatusReport
                 Log.LogError($"[{PluginInfo.Name}] 找不到NetworkAPI.InvokeEvent，拦截失效！");
                 return;
             }
-            Log.LogInfo($"[{PluginInfo.Name}] 成功找到InvokeEvent，准备打补丁");
+            Log.LogInfo($"[{PluginInfo.Name}] 准备MonoMod detour挂钩");
 
-            var patch = new HarmonyMethod(typeof(Patch), nameof(Patch.ManualPrefix));
-            _harmony.Patch(targetMethod, prefix: patch);
+            _detour = new Detour(
+                target: targetMethod,
+                hook: Hook_InvokeEvent
+            );
+            _detour.Apply();
+            Log.LogInfo($"[{PluginInfo.Name}] Detour挂钩成功");
         }
-    }
 
-    public static class Patch
-    {
-        public static bool ManualPrefix(object[] __args)
+        private static void Hook_InvokeEvent(Action<string, object, object> orig, string eventName, object payload, object target)
         {
-            if(__args == null || __args.Length == 0)
+            if(eventName == "Localia.ModList.Sync")
             {
-                return true;
+                LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
+                return;
             }
+            orig.Invoke(eventName, payload, target);
+        }
 
-            string eventName = __args[0] as string;
-            if (eventName == "Localia.ModList.Sync")
-            {
-                Plugin.LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
-                return false;
-            }
+        public override bool Unload()
+        {
+            _detour?.Undo();
+            _detour?.Dispose();
             return true;
         }
     }
