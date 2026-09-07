@@ -8,16 +8,16 @@
 
   <ItemGroup>
     <Reference Include="BepInEx.Core">
-      <HintPath>./lib/BepInEx.Core.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/BepInEx.Core.dll</HintPath>
     </Reference>
     <Reference Include="BepInEx.Unity.IL2CPP">
-      <HintPath>./lib/BepInEx.Unity.IL2CPP.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/BepInEx.Unity.IL2CPP.dll</HintPath>
     </Reference>
     <Reference Include="0Harmony">
-      <HintPath>./lib/0Harmony.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/0Harmony.dll</HintPath>
     </Reference>
     <Reference Include="GTFO‑API">
-      <HintPath>./lib/GTFO‑API.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/GTFO‑API.dll</HintPath>
     </Reference>
   </ItemGroup>
 
