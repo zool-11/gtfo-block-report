@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using UnityEngine;
 using HarmonyLib;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
@@ -29,15 +28,11 @@ namespace BlockModListSync
                 _log.LogInfo($"✅ 补丁加载成功，共拦截 {patchedMethods.Count} 个方法");
                 _log.LogInfo("✅ 模组列表广播已屏蔽，其他玩家将无法查看你的模组列表");
                 _log.LogInfo("========================================");
-
-                // 游戏内顶部通知
-                GameNotification.Show("模组列表屏蔽已生效", Color.green);
             }
             catch (Exception ex)
             {
                 _log.LogError($"❌ 补丁加载失败: {ex.Message}");
                 _log.LogError($"❌ 详细堆栈: {ex.StackTrace}");
-                GameNotification.Show("模组列表屏蔽加载失败", Color.red);
             }
         }
 
@@ -114,46 +109,6 @@ namespace BlockModListSync
             {
                 // 异常时回退到原方法，避免游戏崩溃
                 return true;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 游戏内原生通知辅助类
-    /// </summary>
-    internal static class GameNotification
-    {
-        public static void Show(string message, Color color)
-        {
-            try
-            {
-                // 通过反射获取 GTFO 原生 GUI 管理层
-                var guiManagerType = Type.GetType("GTFO.GuiManager, Assembly-CSharp");
-                if (guiManagerType == null) return;
-
-                var currentProp = guiManagerType.GetProperty("Current",
-                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                if (currentProp == null) return;
-
-                var guiManager = currentProp.GetValue(null);
-                if (guiManager == null) return;
-
-                // 调用系统消息通知方法
-                var addMsgMethod = guiManagerType.GetMethod("AddSystemMessage",
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                    null,
-                    new Type[] { typeof(string), typeof(Color), typeof(float) },
-                    null);
-
-                if (addMsgMethod != null)
-                {
-                    // 3秒后自动消失
-                    addMsgMethod.Invoke(guiManager, new object[] { message, color, 3f });
-                }
-            }
-            catch
-            {
-                // 通知失败不影响核心功能，静默忽略
             }
         }
     }
