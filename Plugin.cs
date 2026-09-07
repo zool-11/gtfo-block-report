@@ -16,15 +16,14 @@ namespace BlockModListSync
 
         public override void Load()
         {
-            // 用 base.Logger 明确调用实例属性，避免和 Logger 类名冲突
-            _log = base.Logger;
+            // IL2CPP 版 BepInEx 的日志属性是 Log，不是 Logger
+            _log = base.Log;
             _log.LogInfo("========================================");
             _log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} 正在加载...");
 
             try
             {
                 _harmony = new Harmony(PluginInfo.GUID);
-                // PatchAll 无返回值，直接调用
                 _harmony.PatchAll(typeof(Patches));
                 
                 _log.LogInfo("✅ 补丁加载成功，模组列表广播已屏蔽");
