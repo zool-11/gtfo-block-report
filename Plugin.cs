@@ -16,7 +16,6 @@ namespace BlockModListSync
 
         public override void Load()
         {
-            // IL2CPP 版 BepInEx 的日志属性是 Log，不是 Logger
             _log = base.Log;
             _log.LogInfo("========================================");
             _log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} 正在加载...");
@@ -26,14 +25,13 @@ namespace BlockModListSync
                 _harmony = new Harmony(PluginInfo.GUID);
                 _harmony.PatchAll(typeof(Patches));
                 
-                _log.LogInfo("✅ 补丁加载成功，模组列表广播已屏蔽");
-                _log.LogInfo("✅ 其他玩家将无法查看你的模组列表");
+                _log.LogInfo("✅ 补丁加载成功，模组列表已隐藏");
+                _log.LogInfo("✅ 其他玩家将看到 MOD: UNKNOWN");
                 _log.LogInfo("========================================");
             }
             catch (Exception ex)
             {
                 _log.LogError($"❌ 补丁加载失败: {ex.Message}");
-                _log.LogError($"❌ 详细堆栈: {ex.StackTrace}");
             }
         }
 
@@ -45,24 +43,21 @@ namespace BlockModListSync
         }
     }
 
-    /// <summary>
-    /// 核心补丁：拦截 LocaliaCore 的两个模组发送入口
-    /// </summary>
     internal static class Patches
     {
         /// <summary>
-        /// 拦截模组数据发送：直接阻止发送具体的模组名称列表
+        /// 拦截模组数据发送：阻止发送具体模组名称列表
         /// </summary>
         [HarmonyPrefix]
         [HarmonyPatch("LocaliaCore.Network_Manager", "sendModListData")]
         private static bool Prefix_SendModListData()
         {
-            // 返回 false = 跳过原方法执行，不发送任何模组数据
             return false;
         }
 
         /// <summary>
-        /// 修改核心信息广播：把模组列表总数量强制改为0，让对方认为你没有模组列表
+        /// 修改核心信息广播：将模组数量强制置为0
+        /// 对方收到后直接显示 MOD: UNKNOWN，不会发起请求、不会一直加载
         /// </summary>
         [HarmonyPrefix]
         [HarmonyPatch("LocaliaCore.Network_Manager", "sendCoreInfo")]
@@ -70,45 +65,45 @@ namespace BlockModListSync
         {
             try
             {
-                // 通过反射获取 Network_Manager 内部类型
                 Type networkType = Type.GetType("LocaliaCore.Network_Manager, LocaliaCore");
                 if (networkType == null)
                     return true;
 
-                // 获取本地挑战码
+                // 获取本地校验码
                 FieldInfo myChalNumField = networkType.GetField("myChalNum",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
                 int myChalNum = (int)myChalNumField.GetValue(null);
 
-                // 获取目标玩家的网络实例
+                // 获取玩家网络实例数组（用 object 接收，避免跨程序集类型冲突）
                 FieldInfo slotSNetField = networkType.GetField("slot_SNet",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                Array slotSNet = (Array)slotSNetField.GetValue(null);
-                object targetPlayer = slotSNet.GetValue(slot);
+                object slotSNetArray = slotSNetField.GetValue(null);
+                
+                // 纯反射调用数组的 GetValue 方法，不转换为 Array 类型
+                MethodInfo getValueMethod = slotSNetArray.GetType().GetMethod("GetValue", new Type[] { typeof(int) });
+                object targetPlayer = getValueMethod.Invoke(slotSNetArray, new object[] { slot });
 
-                // 调用内部方法构造数据包头
+                // 构造数据包头
                 MethodInfo makeHeaderMethod = networkType.GetMethod("MakeHeader",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                // 枚举值 1 对应 CORE_INFO
                 string header = (string)makeHeaderMethod.Invoke(null, new object[] { 1, false, false });
 
                 // 获取 LocaliaCore 版本号
                 string coreVersion = LocaliaCore.API.Core_VersionString();
 
-                // 构造修改后的内容：模组数量强制写 0
+                // 核心修改：模组数量强制写 0
                 string content = $"{header}{myChalNum};0;{coreVersion}";
 
-                // 调用底层发送方法
+                // 发送修改后的数据包
                 MethodInfo sendMethod = networkType.GetMethod("Send",
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
                 sendMethod.Invoke(null, new object[] { targetPlayer, 1, content, 0u, true });
 
-                // 跳过原方法，用我们修改后的内容替代
                 return false;
             }
             catch
             {
-                // 异常时回退到原方法，避免游戏崩溃
+                // 异常时回退原方法，保证游戏不崩溃
                 return true;
             }
         }
