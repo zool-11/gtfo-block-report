@@ -1,6 +1,7 @@
 using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
+using BepInEx.Logging;
 using HarmonyLib;
 using GTFO.API;
 
@@ -10,6 +11,9 @@ namespace BlockPlayerStatusReport
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
+        // 静态日志实例，给Patch用
+        internal static ManualLogSource LogInstance;
+
         public static class PluginInfo
         {
             public const string GUID = "temp.blockreport";
@@ -21,10 +25,10 @@ namespace BlockPlayerStatusReport
 
         public override void Load()
         {
+            LogInstance = Log;
             Log.LogInfo($"[{PluginInfo.Name}] 已加载：拦截ModList向外上报mod列表");
             _harmony = new Harmony(PluginInfo.GUID);
 
-            // 获取NetworkAPI全部方法，手动筛选InvokeEvent，避免编译期依赖Il2CppSystem
             MethodInfo targetMethod = null;
             var methods = typeof(NetworkAPI).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
             foreach(var m in methods)
@@ -51,12 +55,11 @@ namespace BlockPlayerStatusReport
 
     public static class Patch
     {
-        // 第二个参数用object，运行时Il2Cpp会自动做类型兼容
         public static bool Prefix(string eventName, object data)
         {
             if (eventName == "Localia.ModList.Sync")
             {
-                Log.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
+                Plugin.LogInstance?.LogInfo($"[BlockReport] 拦截 ModList 上报自身mod列表数据包");
                 return false;
             }
             return true;
