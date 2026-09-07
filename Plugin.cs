@@ -6,86 +6,74 @@ using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
 
-namespace BlockPlayerStatusReport
+namespace BlockModListSync
 {
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
-        private static ManualLogSource _log;
+        internal static ManualLogSource Log;
         private static Harmony _harmony;
-        private static bool _patched;
-
-        private static class Const
-        {
-            public const string NetworkApiType = "GTFO.API.NetworkAPI, GTFO-API";
-            public const string ChannelType = "SNet_ChannelType";
-            public const string PlayerType = "SNet_Player";
-            public const string TargetMethod = "InvokeFreeSizedEvent";
-            public const string BlockEvent = "Localia.ModList.Sync";
-        }
 
         public static class PluginInfo
         {
             public const string GUID = "dev.blockmodlistsync";
             public const string Name = "BlockModListSync";
-            public const string Version = "1.0.0";
+            public const string Version = "1.0.0-debug2";
         }
 
         public override void Load()
         {
-            _log = Log;
-            _log.LogInfo($"{PluginInfo.Name} v{PluginInfo.Version} loading...");
-
-            if (_patched)
-            {
-                _log.LogWarning("Already patched, skipping load");
-                return;
-            }
+            Log = Logger;
+            Log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} loading...");
 
             try
             {
                 _harmony = new Harmony(PluginInfo.GUID);
 
-                // 运行时解析类型，编译期零外部依赖
-                Type networkApi = AccessTools.TypeByName(Const.NetworkApiType);
-                Type channelType = AccessTools.TypeByName(Const.ChannelType);
-                Type playerType = AccessTools.TypeByName(Const.PlayerType);
+                Type networkApi = AccessTools.TypeByName("GTFO.API.NetworkAPI, GTFO-API");
+                Type channelType = AccessTools.TypeByName("SNet_ChannelType");
+                Type playerType = AccessTools.TypeByName("SNet_Player");
+                Type enumerablePlayer = typeof(IEnumerable<>).MakeGenericType(playerType);
 
-                if (networkApi == null || channelType == null || playerType == null)
+                if (networkApi == null)
                 {
-                    _log.LogError("Failed to resolve required runtime types, patch aborted");
+                    Log.LogError("NetworkAPI type not found, abort patch");
                     return;
                 }
 
-                int success = 0;
-
-                // 重载1：全局广播
-                success += TryPatch(networkApi, Const.TargetMethod,
+                // 拦截 FreeSized 全部三个重载
+                PatchAll(networkApi, "InvokeFreeSizedEvent",
                     new[] { typeof(string), typeof(byte[]), channelType },
-                    nameof(Prefix_Broadcast)) ? 1 : 0;
+                    nameof(Prefix_Free_Broadcast));
 
-                // 重载2：指定单个玩家
-                success += TryPatch(networkApi, Const.TargetMethod,
+                PatchAll(networkApi, "InvokeFreeSizedEvent",
                     new[] { typeof(string), typeof(byte[]), playerType, channelType },
-                    nameof(Prefix_SingleTarget)) ? 1 : 0;
+                    nameof(Prefix_Free_Single));
 
-                // 重载3：指定多个玩家
-                Type enumerablePlayer = typeof(IEnumerable<>).MakeGenericType(playerType);
-                success += TryPatch(networkApi, Const.TargetMethod,
+                PatchAll(networkApi, "InvokeFreeSizedEvent",
                     new[] { typeof(string), typeof(byte[]), enumerablePlayer, channelType },
-                    nameof(Prefix_MultiTarget)) ? 1 : 0;
+                    nameof(Prefix_Free_Multi));
 
-                _log.LogInfo($"Patch finished: {success}/3 overloads applied");
-                _patched = success > 0;
+                // 拦截 Sized 全部三个重载
+                PatchAll(networkApi, "InvokeSizedEvent",
+                    new[] { typeof(string), typeof(byte[]), channelType },
+                    nameof(Prefix_Sized_Broadcast));
 
-                if (success == 0)
-                    _log.LogError("All patches failed, mod will not function");
+                PatchAll(networkApi, "InvokeSizedEvent",
+                    new[] { typeof(string), typeof(byte[]), playerType, channelType },
+                    nameof(Prefix_Sized_Single));
+
+                PatchAll(networkApi, "InvokeSizedEvent",
+                    new[] { typeof(string), typeof(byte[]), enumerablePlayer, channelType },
+                    nameof(Prefix_Sized_Multi));
+
+                Log.LogInfo("Debug patch applied: ALL network events will be logged");
             }
             catch (Exception ex)
             {
-                _log.LogError($"Fatal load error: {ex.Message}");
-                _log.LogDebug(ex.StackTrace);
+                Log.LogError($"Load error: {ex.Message}");
+                Log.LogDebug(ex.StackTrace);
             }
         }
 
@@ -93,77 +81,71 @@ namespace BlockPlayerStatusReport
         {
             try
             {
-                if (_harmony != null && _patched)
-                {
-                    _harmony.UnpatchSelf();
-                    _patched = false;
-                    _log.LogInfo("All patches removed successfully");
-                }
+                _harmony?.UnpatchSelf();
                 return true;
             }
-            catch (Exception ex)
+            catch
             {
-                _log.LogWarning($"Unload error: {ex.Message}");
                 return false;
             }
         }
 
-        #region 补丁辅助方法
-        /// <summary>
-        /// 尝试挂载单个补丁，成功返回true，失败自动捕获异常
-        /// </summary>
-        private static bool TryPatch(Type type, string methodName, Type[] paramTypes, string prefixName)
+        private void PatchAll(Type type, string methodName, Type[] paramTypes, string prefixName)
         {
             try
             {
                 MethodBase target = AccessTools.Method(type, methodName, paramTypes);
                 if (target == null)
                 {
-                    _log.LogWarning($"Method not found: {type.Name}.{methodName}");
-                    return false;
+                    Log.LogWarning($"Method not found: {methodName} [{paramTypes.Length} params]");
+                    return;
                 }
-
-                _harmony.Patch(target, prefix: new HarmonyMethod(typeof(Plugin), prefixName));
-                return true;
+                _harmony.Patch(target, prefix: new HarmonyMethod(GetType(), prefixName));
+                Log.LogInfo($"Patched: {methodName} [{paramTypes.Length} params]");
             }
             catch (Exception ex)
             {
-                _log.LogWarning($"Patch failed [{methodName}]: {ex.Message}");
-                _log.LogDebug(ex.StackTrace);
-                return false;
+                Log.LogWarning($"Patch failed {methodName}: {ex.Message}");
             }
+        }
+
+        #region FreeSized 调试钩子
+        private static bool Prefix_Free_Broadcast(string eventName, byte[] payload, object channelType)
+        {
+            Log.LogInfo($"[FREE] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
+            return true; // 放行，仅打印
+        }
+
+        private static bool Prefix_Free_Single(string eventName, byte[] payload, object target, object channelType)
+        {
+            Log.LogInfo($"[FREE] [Single] {eventName} | size: {payload?.Length ?? 0}");
+            return true;
+        }
+
+        private static bool Prefix_Free_Multi(string eventName, byte[] payload, object targets, object channelType)
+        {
+            Log.LogInfo($"[FREE] [Multi] {eventName} | size: {payload?.Length ?? 0}");
+            return true;
         }
         #endregion
 
-        #region 核心拦截逻辑
-        private static bool ShouldBlock(string eventName, string scenario)
+        #region Sized 调试钩子
+        private static bool Prefix_Sized_Broadcast(string eventName, byte[] payload, object channelType)
         {
-            if (string.IsNullOrEmpty(eventName))
-                return true;
-
-            if (eventName.Equals(Const.BlockEvent, StringComparison.Ordinal))
-            {
-                _log.LogDebug($"Blocked ModList.Sync ({scenario})");
-                return false; // 丢弃数据包
-            }
-            return true; // 放行其他事件
-        }
-        #endregion
-
-        #region Harmony 前缀钩子
-        private static bool Prefix_Broadcast(string eventName, byte[] payload, object channelType)
-        {
-            return ShouldBlock(eventName, "broadcast");
+            Log.LogInfo($"[SIZED] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
+            return true;
         }
 
-        private static bool Prefix_SingleTarget(string eventName, byte[] payload, object target, object channelType)
+        private static bool Prefix_Sized_Single(string eventName, byte[] payload, object target, object channelType)
         {
-            return ShouldBlock(eventName, "single target");
+            Log.LogInfo($"[SIZED] [Single] {eventName} | size: {payload?.Length ?? 0}");
+            return true;
         }
 
-        private static bool Prefix_MultiTarget(string eventName, byte[] payload, object targets, object channelType)
+        private static bool Prefix_Sized_Multi(string eventName, byte[] payload, object targets, object channelType)
         {
-            return ShouldBlock(eventName, "multi target");
+            Log.LogInfo($"[SIZED] [Multi] {eventName} | size: {payload?.Length ?? 0}");
+            return true;
         }
         #endregion
     }
