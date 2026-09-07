@@ -14,6 +14,7 @@ namespace BlockPlayerStatusReport
     {
         internal static ManualLogSource LogInstance;
         private Detour _invokeDetour;
+        private DetourInfo _detourInfo;
 
         public static class PluginInfo
         {
@@ -28,7 +29,6 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                // 遍历已加载程序集查找GTFO‑API类型，不硬编码程序集名
                 Type networkApiType = AppDomain.CurrentDomain.GetAssemblies()
                     .Select(asm => asm.GetType("GTFO.API.NetworkAPI"))
                     .FirstOrDefault(t => t != null);
@@ -59,9 +59,11 @@ namespace BlockPlayerStatusReport
                     return;
                 }
 
-                // MonoMod Detour劫持，绕过Harmony IL泛型AOT限制
-                _invokeDetour = new Detour(targetInvokeEvent, Hook_InvokeEvent);
+                MethodInfo hookMethod = typeof(Plugin).GetMethod(nameof(InvokeHook), BindingFlags.NonPublic | BindingFlags.Static);
+                _detourInfo = DetourInfo.FromSignature(targetInvokeEvent, hookMethod);
+                _invokeDetour = new Detour(_detourInfo);
                 _invokeDetour.Apply();
+
                 Log.LogInfo($"[{PluginInfo.Name}] Detour applied success");
             }
             catch (Exception ex)
@@ -71,19 +73,17 @@ namespace BlockPlayerStatusReport
         }
 
         /// <summary>
-        /// Detour钩子
-        /// eventName == Localia.ModList.Sync → 直接return，丢弃发包，不调用orig
-        /// 其它所有网络事件：原样调用orig，完全不干涉
+        /// Detour钩子，参数顺序：orig放在第一个，后面跟随原方法全部参数
         /// </summary>
-        private static void Hook_InvokeEvent(Action<string, object, object> orig, string eventName, object payload, object target)
+        private static void InvokeHook(Action<object[], object> orig, string eventName, object payload, object target)
         {
             if (eventName == "Localia.ModList.Sync")
             {
                 Plugin.LogInstance?.LogInfo("[BlockReport] Blocked Localia.ModList.Sync network send");
-                // 直接返回，不执行原函数，网络包直接丢弃
+                // 直接return，不调用原方法，丢弃网络包
                 return;
             }
-            orig.Invoke(eventName, payload, target);
+            orig.Invoke(new object[] { eventName, payload, target }, null);
         }
 
         public override bool Unload()
