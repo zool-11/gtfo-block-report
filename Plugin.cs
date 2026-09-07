@@ -4,7 +4,7 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
-using HarmonyLib;
+using MonoMod.RuntimeDetour;
 
 namespace BlockPlayerStatusReport
 {
@@ -13,6 +13,7 @@ namespace BlockPlayerStatusReport
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource LogInstance;
+        private Detour _invokeDetour;
 
         public static class PluginInfo
         {
@@ -27,7 +28,7 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] Load() start");
             try
             {
-                // 遍历已经加载的程序集，找GTFO.API.NetworkAPI，不硬编码程序集名称
+                // 遍历已加载程序集查找GTFO‑API类型，不硬编码程序集名
                 Type networkApiType = AppDomain.CurrentDomain.GetAssemblies()
                     .Select(asm => asm.GetType("GTFO.API.NetworkAPI"))
                     .FirstOrDefault(t => t != null);
@@ -54,17 +55,14 @@ namespace BlockPlayerStatusReport
 
                 if (targetInvokeEvent == null)
                 {
-                    Log.LogError($"[{PluginInfo.Name}] InvokeEvent method not found, mod disabled");
+                    Log.LogError($"[{PluginInfo.Name}] InvokeEvent not found, mod disabled");
                     return;
                 }
 
-                MethodInfo prefixMethod = typeof(Plugin).GetMethod(nameof(InvokeEventPrefix), BindingFlags.Public | BindingFlags.Static);
-                HarmonyMethod harmonyPrefix = new HarmonyMethod(prefixMethod);
-
-                Harmony harmony = new Harmony(PluginInfo.GUID);
-                harmony.Patch(targetInvokeEvent, prefix: harmonyPrefix);
-
-                Log.LogInfo($"[{PluginInfo.Name}] Patch apply success");
+                // MonoMod Detour劫持，绕过Harmony IL泛型AOT限制
+                _invokeDetour = new Detour(targetInvokeEvent, Hook_InvokeEvent);
+                _invokeDetour.Apply();
+                Log.LogInfo($"[{PluginInfo.Name}] Detour applied success");
             }
             catch (Exception ex)
             {
@@ -72,12 +70,26 @@ namespace BlockPlayerStatusReport
             }
         }
 
-        public static bool InvokeEventPrefix(string eventName, object payload, object target)
+        /// <summary>
+        /// Detour钩子
+        /// eventName == Localia.ModList.Sync → 直接return，丢弃发包，不调用orig
+        /// 其它所有网络事件：原样调用orig，完全不干涉
+        /// </summary>
+        private static void Hook_InvokeEvent(Action<string, object, object> orig, string eventName, object payload, object target)
         {
             if (eventName == "Localia.ModList.Sync")
             {
-                Plugin.LogInstance?.LogInfo("[BlockReport] DETECTED Localia.ModList.Sync is firing!");
+                Plugin.LogInstance?.LogInfo("[BlockReport] Blocked Localia.ModList.Sync network send");
+                // 直接返回，不执行原函数，网络包直接丢弃
+                return;
             }
+            orig.Invoke(eventName, payload, target);
+        }
+
+        public override bool Unload()
+        {
+            _invokeDetour?.Undo();
+            _invokeDetour?.Dispose();
             return true;
         }
     }
