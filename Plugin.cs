@@ -10,14 +10,14 @@ namespace BlockModListSync
 {
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
     [BepInProcess("GTFO.exe")]
-    [BepInDependency("localia.core", BepInDependency.DependencyFlags.HardDependency)]
+    // 移除硬依赖，避免GUID不匹配导致加载失败
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource Logger;
         private static Harmony _harmony;
         private static bool _patched = false;
 
-        // 反射缓存 - 改为internal，同程序集Patches类可访问
+        // 反射缓存
         internal static FieldInfo _myChalNum;
         internal static FieldInfo _slotSNet;
         internal static MethodInfo _makeHeader;
@@ -29,12 +29,13 @@ namespace BlockModListSync
         {
             Logger = base.Log;
             Logger.LogInfo("========================================");
-            Logger.LogInfo("  BlockModListSync 权限修复最终版");
+            Logger.LogInfo("  BlockModListSync 依赖修复最终版");
             Logger.LogInfo("========================================");
 
             _harmony = new Harmony(PluginInfo.GUID);
             AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
 
+            // 扫描已加载的程序集，兼容LocaliaCore先加载的情况
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 TryPatch(asm);
         }
@@ -170,7 +171,7 @@ namespace BlockModListSync
     {
         public const string GUID = "dev.blockmodlistsync";
         public const string Name = "BlockModListSync";
-        public const string Version = "4.2.7";
+        public const string Version = "4.2.8";
     }
 
     public static class Patches
