@@ -8,12 +8,12 @@ using BepInEx.Logging;
 namespace BlockModListSync
 {
     [BepInPlugin(PluginInfo.GUID, PluginInfo.Name, PluginInfo.Version)]
-    [BepInDependency("LocaliaCore", BepInDependency.DependencyFlags.HardDependency)]
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
         internal static ManualLogSource Logger;
         private static Harmony _harmony;
+        private static bool _patchesApplied = false;
 
         // 预缓存反射元数据
         internal static FieldInfo _myChalNumField;
@@ -29,26 +29,52 @@ namespace BlockModListSync
             Logger.LogInfo("========================================");
             Logger.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} 正在加载...");
 
+            // 先检查是否已经加载了 LocaliaCore
+            Assembly existingLocalia = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.GetName().Name == "LocaliaCore")
+                {
+                    existingLocalia = asm;
+                    break;
+                }
+            }
+
+            if (existingLocalia != null)
+            {
+                // 已加载，直接应用补丁
+                ApplyPatches(existingLocalia);
+            }
+            else
+            {
+                // 未加载，监听程序集加载事件
+                AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
+                Logger.LogInfo("⏳ 等待 LocaliaCore 程序集加载...");
+            }
+
+            Logger.LogInfo("========================================");
+        }
+
+        private static void OnAssemblyLoad(object sender, AssemblyLoadEventArgs args)
+        {
+            if (_patchesApplied) return;
+
+            if (args.LoadedAssembly.GetName().Name == "LocaliaCore")
+            {
+                // LocaliaCore 加载完成，应用补丁
+                ApplyPatches(args.LoadedAssembly);
+                // 取消监听，避免重复执行
+                AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
+            }
+        }
+
+        private static void ApplyPatches(Assembly localiaAssembly)
+        {
             try
             {
-                // 1. 定位 LocaliaCore 程序集
-                Assembly localiaAssembly = null;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    if (asm.GetName().Name == "LocaliaCore")
-                    {
-                        localiaAssembly = asm;
-                        break;
-                    }
-                }
+                Logger.LogInfo("📦 检测到 LocaliaCore 程序集，开始应用补丁...");
 
-                if (localiaAssembly == null)
-                {
-                    Logger.LogError("❌ 未找到 LocaliaCore 程序集，补丁加载终止");
-                    return;
-                }
-
-                // 2. 缓存所有反射元数据
+                // 缓存所有反射元数据
                 Type networkType = localiaAssembly.GetType("LocaliaCore.Network_Manager");
                 if (networkType == null)
                 {
@@ -91,7 +117,6 @@ namespace BlockModListSync
                     return;
                 }
 
-                // 3. 挂载补丁
                 _harmony = new Harmony(PluginInfo.GUID);
 
                 // 补丁1：拦截模组明细发送
@@ -124,9 +149,9 @@ namespace BlockModListSync
                     Logger.LogWarning("⚠️ 未找到 sendCoreInfo 方法");
                 }
 
+                _patchesApplied = true;
                 Logger.LogInfo("✅ 模组列表完全隐藏已生效");
                 Logger.LogInfo("✅ 对方将直接显示 MOD: UNKNOWN");
-                Logger.LogInfo("========================================");
             }
             catch (Exception ex)
             {
