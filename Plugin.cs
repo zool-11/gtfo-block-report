@@ -12,9 +12,6 @@ namespace BlockModListSync
     [BepInProcess("GTFO.exe")]
     public class Plugin : BasePlugin
     {
-        internal static ManualLogSource Log;
-        private static Harmony _harmony;
-
         public static class PluginInfo
         {
             public const string GUID = "dev.blockmodlistsync";
@@ -22,9 +19,10 @@ namespace BlockModListSync
             public const string Version = "1.0.0-debug2";
         }
 
+        private static Harmony _harmony;
+
         public override void Load()
         {
-            Log = Logger;
             Log.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} loading...");
 
             try
@@ -113,7 +111,7 @@ namespace BlockModListSync
         private static bool Prefix_Free_Broadcast(string eventName, byte[] payload, object channelType)
         {
             Log.LogInfo($"[FREE] [Broadcast] {eventName} | size: {payload?.Length ?? 0}");
-            return true; // 放行，仅打印
+            return true; // 放行，仅打印日志
         }
 
         private static bool Prefix_Free_Single(string eventName, byte[] payload, object target, object channelType)
