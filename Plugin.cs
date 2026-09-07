@@ -3,7 +3,6 @@ using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 using GTFO.API;
-using Il2CppSystem;
 
 namespace BlockPlayerStatusReport
 {
@@ -25,11 +24,19 @@ namespace BlockPlayerStatusReport
             Log.LogInfo($"[{PluginInfo.Name}] 已加载：拦截ModList向外上报mod列表");
             _harmony = new Harmony(PluginInfo.GUID);
 
-            MethodInfo targetMethod = AccessTools.Method(
-                typeof(NetworkAPI),
-                "InvokeEvent",
-                new[] { typeof(string), typeof(Object) }
-            );
+            // 获取NetworkAPI全部方法，手动筛选InvokeEvent，避免编译期依赖Il2CppSystem
+            MethodInfo targetMethod = null;
+            var methods = typeof(NetworkAPI).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+            foreach(var m in methods)
+            {
+                if(m.Name != "InvokeEvent") continue;
+                var pars = m.GetParameters();
+                if(pars.Length == 2 && pars[0].ParameterType == typeof(string))
+                {
+                    targetMethod = m;
+                    break;
+                }
+            }
 
             if (targetMethod == null)
             {
@@ -44,7 +51,8 @@ namespace BlockPlayerStatusReport
 
     public static class Patch
     {
-        public static bool Prefix(string eventName, Object data)
+        // 第二个参数用object，运行时Il2Cpp会自动做类型兼容
+        public static bool Prefix(string eventName, object data)
         {
             if (eventName == "Localia.ModList.Sync")
             {
